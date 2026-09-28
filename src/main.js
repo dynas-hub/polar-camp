@@ -5,6 +5,7 @@ import { createInput } from './input.js';
 import { createFx } from './fx.js';
 import { createGame } from './game.js';
 import { createRecorder } from './recorder.js';
+import { createAudio } from './audio.js';
 
 const params = new URLSearchParams(location.search);
 if (params.has('shorts')) document.body.classList.add('shorts');
@@ -75,8 +76,17 @@ const hud = {
 
 const input = createInput(stage);
 const fx = createFx(scene, camera, labelsEl, stage);
+// Sound: phones only allow audio after a tap, so unlock on the first touch/click/key.
+const sfx = createAudio();
+const unlockAudio = () => sfx.unlock();
+['pointerdown', 'keydown', 'touchend'].forEach((ev) => window.addEventListener(ev, unlockAudio, { passive: true }));
+const soundBtn = document.getElementById('sound-btn');
+const showSound = () => { soundBtn.textContent = sfx.muted ? '🔇' : '🔊'; };
+showSound();
+soundBtn.addEventListener('click', () => { sfx.setMuted(!sfx.muted); showSound(); sfx.play('click'); });
+
 // Autopilot sessions (footage/tests) never read or write the player's save.
-const game = createGame({ scene, camera, fx, input, hud, labelsEl, useSave: !params.has('auto') });
+const game = createGame({ scene, camera, fx, input, hud, labelsEl, useSave: !params.has('auto'), sfx });
 const recorder = createRecorder(stage, canvas, () => renderer.render(scene, camera));
 
 $('retry').addEventListener('click', () => game.retry());
@@ -107,6 +117,8 @@ function closeHelp() {
 }
 
 function startGame() {
+  sfx.unlock();
+  sfx.play('click');
   $('title-screen').classList.add('hidden');
   document.body.classList.add('playing');
   started = true;
@@ -230,7 +242,7 @@ async function film(name, seconds, opts = {}) {
 // Dev hooks (console / automation): PC.snap('name'), PC.rec.start('name'), PC.rec.stop(), PC.game.auto.on = true
 // PC.sim(seconds) fast-forwards the game logic without rendering (works in background tabs).
 window.PC = {
-  game, recorder, rec: recorder, snap: recorder.snap, renderer, scene, camera, film,
+  game, recorder, rec: recorder, snap: recorder.snap, renderer, scene, camera, film, sfx,
   sim(seconds, step = 1 / 30) {
     started = true;
     for (let t = 0; t < seconds; t += step) {

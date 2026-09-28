@@ -34,7 +34,9 @@ const easeOutBack = (t) => {
 
 const dist2d = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
 
-export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = true }) {
+const NO_SFX = { play() {}, setListener() {} };
+
+export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = true, sfx = NO_SFX }) {
   // ---------- World ----------
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), Models.M.snow);
   ground.rotation.x = -Math.PI / 2;
@@ -149,7 +151,11 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     c.incoming++;
     fx.fly(mesh, from, () => backTarget(c), {
       duration: 0.3, arc: 1.2,
-      onDone: (m) => { c.incoming--; pushStack(c, type, m); },
+      onDone: (m) => {
+        c.incoming--;
+        pushStack(c, type, m);
+        sfx.play('pop', c.isPlayer ? {} : { at: c.obj.position, vol: 0.4 });
+      },
     });
   }
 
@@ -273,6 +279,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       fx.burst(at, 0xd09a5e, 10, { speed: 4, up: 4 });
       fx.text(at.clone().setY(2.5), (d.kind === 'hire' ? d.name.replace('HIRE ', '') + ' HIRED' : d.name) + '!', 'warn', { life: 1.3, rise: 80 });
       fx.addShake(0.25);
+      sfx.play('build');
       events.push({ type: 'build', id: d.id, t: clock });
       learn(z.currency === 'log' ? 'build' : 'buy');
       save();
@@ -288,6 +295,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     w.hp = Math.max(0, w.hp - dmg);
     fx.burst(pointForWall(w.side).setY(1.2), 0xb57a3f, 10, { speed: 4, up: 4, size: 0.14 });
     fx.addShake(0.1);
+    sfx.play(w.hp <= 0 ? 'crash' : 'crack', { at: pointForWall(w.side) });
     if (w.hp <= 0) {
       // a breach: bears walk through until it's repaired
       w.broken = true;
@@ -356,6 +364,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
           w.payT = ECONOMY.payTick * 2;
           fx.fly(it.mesh, it.worldPos, () => pointForWall(w.side).setY(0.8), { duration: 0.35, arc: 1.6 });
           repairWall(w, WALL.repairPerLog);
+          sfx.play('hammer');
           learn('repair');
         }
       }
@@ -404,6 +413,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       setCash(cash - chunk);
       fx.fly(Models.makeCash(), player.pos.clone().setY(1.2), () => target, { duration: 0.28, arc: 1.4 });
     }
+    sfx.play('place');
     refreshLabel(z);
     Models.setPadProgress(z.pad, z.paid / z.total);
     if (z.paid >= z.total) z.completeT = 0.3;
@@ -430,6 +440,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     fx.burst(at, 0xffd34d, 16, { speed: 5, up: 5, size: 0.16 });
     fx.text(player.pos.clone().setY(2.6), `${u.def.name} LV${u.level + 1}!`, 'warn', { life: 1.2, rise: 80 });
     fx.addShake(0.15);
+    sfx.play('levelup');
     events.push({ type: 'upgrade', id: u.def.id, level: u.level, t: clock });
     learn(u.currency === 'plate' ? 'forge' : 'buy');
     if (u.def.id === 'bag') layoutStack(player.c);
@@ -779,6 +790,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     grill.smokeT -= dt;
     if (grill.smokeT <= 0) {
       grill.smokeT = 0.18;
+      sfx.play('sizzle', { at: grill.pos, vol: 0.8 });
       fx.burst(grill.pos.clone().setY(1), 0xdfe6ec, 1, { speed: 0.4, up: 3.5, size: 0.2, life: 0.9 });
     }
     if (grill.cookT >= ECONOMY.cookTime) {
@@ -823,8 +835,8 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       duration: 0.25, arc: 1,
       onDone: () => {
         stats.sold++;
-        if (price > 0) addToPile(price);
-        else fx.text(top.clone().setY(2), '$0 yuck!', 'hurt', { life: 0.8, rise: 40 });
+        if (price > 0) { addToPile(price); sfx.play('sell', { at: counter.pos }); }
+        else { fx.text(top.clone().setY(2), '$0 yuck!', 'hurt', { life: 0.8, rise: 40 }); sfx.play('full', { at: counter.pos }); }
       },
     });
   }
@@ -856,7 +868,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       scene.remove(bill.mesh);
       fx.fly(bill.mesh, from, () => player.pos.clone().setY(1.3), {
         duration: 0.22, arc: 0.8,
-        onDone: () => { setCash(cash + value); hud.bumpCash(); learn('cash'); fx.text(player.pos.clone().setY(2.4), `+$${value}`, 'cash', { life: 0.6, rise: 40 }); },
+        onDone: () => { setCash(cash + value); hud.bumpCash(); learn('cash'); sfx.play('coin'); fx.text(player.pos.clone().setY(2.4), `+$${value}`, 'cash', { life: 0.6, rise: 40 }); },
       });
     }
   }
@@ -902,6 +914,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
         // arrows bounce off the plates
         fx.burst(at.clone().setY(1.2 * b.def.scale), 0xfff3a0, 4, { speed: 3, up: 2, size: 0.06 });
         if (Math.random() < 0.35) fx.text(at.clone().setY(2 * b.def.scale), 'tink', 'warn', { life: 0.5, rise: 30 });
+        sfx.play('tink', { at: b.pos });
         return;
       }
       // the axe (or a ballista bolt) breaks the armor first
@@ -910,6 +923,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       fx.burst(at.clone().setY(1.3 * b.def.scale), 0xc9d3dc, 6, { speed: 4, up: 3, size: 0.1 });
       const left = Math.ceil(b.armor / (b.maxArmor / b.def.plates));
       const plates = b.obj.userData.plates;
+      sfx.play(plates.length > left ? 'clang' : 'block', { at: b.pos });
       while (plates.length > left) {
         const p = plates.pop();
         const wp = p.getWorldPosition(V());
@@ -925,6 +939,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     b.hp -= dmg;
     b.flash = 0.12;
     Models.setHealth(b.bar, b.hp / b.maxHp);
+    if (from) sfx.play('hit', { at: b.pos });
     fx.burst(at, 0xffffff, 5, { speed: 3, up: 3 });
     fx.burst(at, 0xe04848, 3, { speed: 3, up: 3, size: 0.09 });
     fx.text(at.clone().setY(1.8 * b.def.scale), String(dmg), 'hurt', { life: 0.6, rise: 40 });
@@ -958,6 +973,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     fx.burst(b.pos.clone().setY(0.8), 0xffffff, b.boss ? 30 : 14, { speed: 5, up: 5, size: 0.2 });
     fx.addShake(b.boss ? 0.5 : 0.12);
     if (b.boss) fx.text(b.pos.clone().setY(3), `${b.def.name} DOWN!`, 'warn', { life: 1.5, rise: 90 });
+    sfx.play(b.boss ? 'bossDown' : 'bearDown', { at: b.pos });
     events.push({ type: 'kill', kind: b.kind, t: clock });
     stats.kills++;
     for (let i = 0; i < (b.def.meat || 0); i++) dropItem('meat', b.pos);
@@ -1087,6 +1103,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     mesh.position.copy(from);
     scene.add(mesh);
     thrown.push({ mesh, from, to, t: 0, dur: 1.1, wall: aim.wall, dmg: b.def.wallDamage, hit: b.def.hitDamage });
+    sfx.play('whoosh', { at: b.pos });
   }
 
   function updateThrown(dt) {
@@ -1120,6 +1137,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
           c.burst = true;
           fx.burst(c.pos.clone().setY(0.8), 0x8fe05a, 26, { speed: 6, up: 3, size: 0.25, life: 0.8 });
           fx.addShake(0.25);
+          sfx.play('burst', { at: c.pos });
           if (!player.dead && dist2d(player.pos, c.pos) < POISON.cloudRadius) poisonPlayer(POISON.cloud);
         }
       } else {
@@ -1138,6 +1156,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     if (P.poisonT <= 0) {
       P.poisonTick = 0;
       fx.text(P.pos.clone().setY(2.8), '☠ POISONED', 'hurt', { life: 1, rise: 50 });
+      sfx.play('poison');
     }
     P.poisonT = Math.max(P.poisonT, seconds); // refreshes, never stacks
   }
@@ -1151,6 +1170,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       if (warm) {
         P.poisonT = 0;
         fx.text(P.pos.clone().setY(2.6), 'CURED!', 'cash', { life: 1, rise: 50 });
+        sfx.play('cure');
         fx.burst(P.pos.clone().setY(1), 0xffc36b, 10, { speed: 2, up: 3, size: 0.1 });
         learn('campfire');
       } else {
@@ -1173,8 +1193,10 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       P.armor -= soaked;
       dmg -= soaked;
       fx.burst(P.pos.clone().setY(1.2), 0x9fd0ff, 5, { speed: 3, up: 3, size: 0.09 });
+      sfx.play('block');
       if (dmg <= 0) { fx.text(P.pos.clone().setY(2.2), `-${soaked} 🛡️`, 'warn', { life: 0.6, rise: 40 }); return; }
     }
+    sfx.play(ignoreArmor ? 'poison' : 'hurt');
     P.hp -= dmg;
     fx.addShake(ignoreArmor ? 0.06 : 0.2);
     fx.text(P.pos.clone().setY(2.2), `-${dmg}`, 'hurt', { life: 0.6, rise: 40 });
@@ -1185,6 +1207,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       P.dead = true;
       P.obj.rotation.z = Math.PI / 2;
       events.push({ type: 'defeat', wave: waves.n, t: clock });
+      sfx.play('defeat');
       hud.defeat(true);
     }
   }
@@ -1241,6 +1264,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     fx.burst(at, 0xffc84a, 24, { speed: 5, up: 5, size: 0.18 });
     fx.text(at.clone().setY(4), 'BALLISTA!', 'warn', { life: 1.4, rise: 80 });
     fx.addShake(0.3);
+    sfx.play('build'); sfx.play('levelup');
     events.push({ type: 'ballista', id: t.id, t: clock });
     learn('ballista');
     save();
@@ -1267,6 +1291,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
           arrow.position.set(t.x, t.ballista ? 3 : 2.7, t.z);
           scene.add(arrow);
           arrows.push({ obj: arrow, target, last: target.pos.clone(), dmg: t.damage, pierce: t.ballista, speed: t.ballista ? BALLISTA.boltSpeed : TOWER.arrowSpeed });
+          sfx.play(t.ballista ? 'bolt' : 'arrow', { at: arrow.position });
         }
       } else head.rotation.y += dt * 0.5;
     }
@@ -1297,6 +1322,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     fx.burst(at, 0xd09a5e, 5, { speed: 3, up: 3, size: 0.1 });
     fx.burst(at.clone().setY(2), 0xffffff, 5, { speed: 2, up: 1, size: 0.1 });
     collectToBack(c, 'log', at);
+    sfx.play('chop', { at, vol: c === player.c ? 1 : 0.5 });
     stats.logs++;
     if (c === player.c && ++playerChops >= 3) learn('chop');
     if (t.hp <= 0) {
@@ -1305,6 +1331,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       t.regrow = TREE.regrow;
       t.obj.visible = false;
       t.stump.visible = true;
+      sfx.play('treeFall', { at, vol: c === player.c ? 1 : 0.5 });
       fx.burst(at.clone().setY(1.5), 0x2f6f5a, 10, { speed: 4, up: 4, size: 0.18 });
       fx.burst(at.clone().setY(2), 0xffffff, 10, { speed: 4, up: 4, size: 0.14 });
     }
@@ -1329,8 +1356,9 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       });
       hud.banner(`⚠ ${names.join(' + ')}!`);
       fx.addShake(0.4);
+      sfx.play('bossHorn');
       events.push({ type: 'boss', kinds: bosses, n, t: clock });
-    } else hud.banner(`WAVE ${n}: BEARS!`);
+    } else { hud.banner(`WAVE ${n}: BEARS!`); sfx.play('horn'); }
     fx.addShake(0.2);
     events.push({ type: 'wave', n: waves.n, t: clock });
     waves.timer = waves.total = WAVES.interval;
@@ -1617,6 +1645,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
   function update(dt) {
     clock += dt;
     const P = player;
+    sfx.setListener(P.pos.x, P.pos.z); // sounds fade with distance from the lumberjack
     const ud = P.obj.userData;
 
     // --- movement ---
@@ -1665,7 +1694,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       }
       if (target && stackFree(P.c) <= 0) {
         P.maxMsgT -= dt;
-        if (P.maxMsgT <= 0) { fx.text(P.pos.clone().setY(2.8), 'MAX', 'warn'); P.maxMsgT = 1.2; }
+        if (P.maxMsgT <= 0) { fx.text(P.pos.clone().setY(2.8), 'MAX', 'warn'); sfx.play('full'); P.maxMsgT = 1.2; }
         target = null;
       }
     }
@@ -1742,7 +1771,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
         const value = d.value;
         fx.fly(d.mesh, d.mesh.position.clone(), () => P.pos.clone().setY(1.3), {
           duration: 0.3, arc: 1,
-          onDone: () => { setCash(cash + value); hud.bumpCash(); learn('loot'); fx.text(P.pos.clone().setY(2.6), `+$${value}`, 'cash', { life: 1, rise: 60 }); },
+          onDone: () => { setCash(cash + value); hud.bumpCash(); learn('loot'); sfx.play('levelup'); fx.text(P.pos.clone().setY(2.6), `+$${value}`, 'cash', { life: 1, rise: 60 }); },
         });
         continue;
       }
