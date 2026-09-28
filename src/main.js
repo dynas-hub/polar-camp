@@ -51,6 +51,18 @@ const hud = {
   banner(text) { const b = $('banner'); b.textContent = text; b.classList.remove('show'); void b.offsetWidth; b.classList.add('show'); },
   defeat(show) { $('defeat').classList.toggle('hidden', !show); input.setEnabled(!show); },
   flashHurt() { stage.animate([{ boxShadow: 'inset 0 0 80px rgba(255,40,40,.6)' }, { boxShadow: 'inset 0 0 0 rgba(255,40,40,0)' }], 300); },
+  // bottom tip telling the player what to do next; pulses when the goal changes
+  setHint(text, icon) {
+    const h = $('hint');
+    const prev = $('hint-text').textContent;
+    if (prev === text) return;
+    $('hint-text').textContent = text;
+    $('hint-ico').textContent = icon || '';
+    h.classList.toggle('hidden', !text);
+    // pulse only on a new goal, not when just a number in it changes ("$490" → "$466")
+    const digitless = (s) => s.replace(/[\d$,/]+/g, '');
+    if (digitless(prev) !== digitless(text)) { h.classList.remove('pulse'); void h.offsetWidth; h.classList.add('pulse'); }
+  },
 };
 
 const input = createInput(stage);
@@ -60,9 +72,58 @@ const game = createGame({ scene, camera, fx, input, hud, labelsEl, useSave: !par
 const recorder = createRecorder(stage, canvas, () => renderer.render(scene, camera));
 
 $('retry').addEventListener('click', () => game.retry());
+
+// ---------- Title screen & How to play ----------
 let started = false;
-$('play').addEventListener('click', () => { $('title-screen').classList.add('hidden'); input.setEnabled(true); started = true; });
-if (params.has('auto')) { $('title-screen').classList.add('hidden'); game.auto.on = true; started = true; }
+let paused = false; // true while the How to play panel is open
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch { /* private mode: ignore */ } },
+};
+
+if (game.loaded) {
+  $('play').textContent = 'CONTINUE';
+  $('new-game').classList.remove('hidden');
+}
+
+function openHelp() {
+  paused = true;
+  input.setEnabled(false);
+  $('help').classList.remove('hidden');
+}
+function closeHelp() {
+  $('help').classList.add('hidden');
+  store.set('polarcamp-seen-help', '1');
+  paused = false;
+  if (started && !game.player.dead) input.setEnabled(true);
+}
+
+function startGame() {
+  $('title-screen').classList.add('hidden');
+  document.body.classList.add('playing');
+  started = true;
+  input.setEnabled(true);
+  // first time ever: show the rules once before the first wave
+  if (!store.get('polarcamp-seen-help')) openHelp();
+}
+
+$('play').addEventListener('click', startGame);
+$('how').addEventListener('click', openHelp);
+$('help-btn').addEventListener('click', openHelp);
+$('help-close').addEventListener('click', closeHelp);
+$('new-game').addEventListener('click', () => {
+  if (!confirm('Start a new game? Your current camp will be lost.')) return;
+  game.resetSave();
+  location.replace(location.pathname); // reload without any URL flags
+});
+
+if (params.has('auto')) {
+  $('title-screen').classList.add('hidden');
+  $('help-btn').classList.add('hidden');
+  document.body.classList.add('playing');
+  game.auto.on = true;
+  started = true;
+}
 
 // ---------- Resize ----------
 function resize() {
@@ -87,8 +148,8 @@ let last = performance.now();
 // One simulation + camera step. Shared by the live loop and offline filming.
 function tick(dt) {
   input.update();
-  // before PLAY the world still renders (title backdrop) but waves don't tick
-  game.update(started ? dt : 0);
+  // before PLAY (title backdrop) and while How to play is open, the world renders but time stops
+  game.update(started && !paused ? dt : 0);
   placeCamera(dt);
   fx.update(dt, focus);
 }
@@ -171,6 +232,7 @@ window.PC = {
     }
     focus.copy(game.player.pos);
     placeCamera(1); // so a PC.snap right after a sim frames the player
+    game.update(0); // re-project the on-screen labels with the new camera
     return { cash: game.cash, wave: game.wave, stats: { ...game.stats }, helpers: game.helpers.map((h) => `${h.kind}:${h.state}:${h.c.stack.length}`) };
   },
 };

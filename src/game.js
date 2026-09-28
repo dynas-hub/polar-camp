@@ -49,8 +49,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
 
   const campfire = Models.makeCampfire();
   campfire.position.set(0, 0.12, -0.8);
-  scene.add(campfire);
-  circles.push({ x: 0, z: -0.8, r: 0.55 });
+  scene.add(campfire); // decoration: you can walk right over it
 
   const tent = Models.makeTent();
   tent.position.set(-2.4, 0.12, 0.9);
@@ -514,19 +513,31 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     if (h.kind === 'carrier') {
       const drop = h.target && drops.includes(h.target) ? h.target : null;
       if (!drop) h.target = null;
-      if (stackFree(c) > 0 && drops.length && h.state !== 'deliver') {
+      const pickable = drops.filter((d) => (!d.claim || d.claim === h) && !(d.skipUntil > clock));
+      if (stackFree(c) > 0 && pickable.length && h.state !== 'deliver') {
         if (!h.target) {
-          h.target = drops.filter((d) => !d.claim || d.claim === h).sort((a, b) => dist2d(a.pos, h.pos) - dist2d(b.pos, h.pos))[0] || null;
-          if (h.target) h.target.claim = h;
+          h.target = pickable.sort((a, b) => dist2d(a.pos, h.pos) - dist2d(b.pos, h.pos))[0] || null;
+          if (h.target) { h.target.claim = h; h.targetT = 0; }
         }
-        if (h.target && walkTo(h, h.target.pos, dt, 0.7)) {
-          const d = h.target;
-          drops.splice(drops.indexOf(d), 1);
-          scene.remove(d.mesh);
-          collectToBack(c, 'meat', d.mesh.position.clone(), d.mesh);
+        // can't reach it (blocked by something)? give up on this piece for a while
+        h.targetT = (h.targetT || 0) + dt;
+        if (h.target && h.targetT > 6) {
+          h.target.claim = null;
+          h.target.skipUntil = clock + 15;
           h.target = null;
         }
+        // grab anything within arm's reach on the way, not just the target
+        for (let i = drops.length - 1; i >= 0 && stackFree(c) > 0; i--) {
+          const d = drops[i];
+          if (dist2d(d.pos, h.pos) > 1.1 || (d.claim && d.claim !== h)) continue;
+          drops.splice(i, 1);
+          scene.remove(d.mesh);
+          collectToBack(c, 'meat', d.mesh.position.clone(), d.mesh);
+          if (d === h.target) h.target = null;
+        }
+        if (h.target) walkTo(h, h.target.pos, dt, 0.6);
       } else if (countOf(c, 'meat') > 0) {
+        if (h.target) { h.target.claim = null; h.target = null; } // release the reservation
         h.state = 'deliver';
         const dest = grill.built ? spots.grillIn() : spots.counter();
         if (walkTo(h, dest, dt, 0.5)) {
@@ -648,14 +659,20 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
   }
 
   // ---------- Selling ----------
+  // Wood still needed by the build squares that are open right now.
+  const logsNeeded = () => zones.reduce((n, z) => n + (z.state === 'open' && z.currency === 'log' ? z.total - z.paid : 0), 0);
+
   function sellFrom(c, dt) {
     c.sellT -= dt;
     if (c.sellT > 0) return;
-    const type = countOf(c, 'steak') ? 'steak' : 'meat';
+    // meat first (steaks, then raw); then any wood nothing can use anymore, so the bag never gets stuck full
+    let type = countOf(c, 'steak') ? 'steak' : countOf(c, 'meat') ? 'meat' : null;
+    if (!type && c.isPlayer && countOf(c, 'log') > logsNeeded()) type = 'log';
+    if (!type) return;
     const it = popStack(c, type);
     if (!it) return;
     c.sellT = ECONOMY.sellTick;
-    const price = type === 'steak' ? ECONOMY.steakPrice : ECONOMY.meatPrice;
+    const price = type === 'steak' ? ECONOMY.steakPrice : type === 'meat' ? ECONOMY.meatPrice : ECONOMY.logPrice;
     const top = counter.pos.clone().setY(1.1);
     fx.fly(it.mesh, it.worldPos, () => top, {
       duration: 0.25, arc: 1,
@@ -663,15 +680,16 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     });
   }
 
+  // Each bill on the pile carries its own value (meat $5, steak $12, wood $1).
   function addToPile(value) {
     counter.pileValue += value;
-    if (counter.pile.length >= 40) return; // visual cap; value still counts
+    if (counter.pile.length >= 40) { counter.pile[counter.pile.length - 1].value += value; return; } // visual cap
     const i = counter.pile.length;
-    const bill = Models.makeCash();
-    bill.position.set(counter.pos.x + 1.5 + (i % 2) * 0.55 - 0.27, 0.16 + Math.floor(i / 2) * 0.08, counter.pos.z + 0.3);
-    scene.add(bill);
-    counter.pile.push(bill);
-    fx.burst(bill.position.clone(), 0x7cff6b, 3, { speed: 1.5, up: 2, size: 0.07 });
+    const mesh = Models.makeCash();
+    mesh.position.set(counter.pos.x + 1.5 + (i % 2) * 0.55 - 0.27, 0.16 + Math.floor(i / 2) * 0.08, counter.pos.z + 0.3);
+    scene.add(mesh);
+    counter.pile.push({ mesh, value });
+    fx.burst(mesh.position.clone(), 0x7cff6b, 3, { speed: 1.5, up: 2, size: 0.07 });
   }
 
   function updateCounter(dt) {
@@ -680,14 +698,14 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     // cash pile next to the table; walk over it to collect
     const pilePos = tmpB.set(counter.pos.x + 1.5, 0, counter.pos.z + 0.3);
     counter.collectT -= dt;
-    if (!P.dead && counter.pileValue > 0 && dist2d(P.pos, pilePos) < 1.4 && counter.collectT <= 0) {
+    if (!P.dead && counter.pile.length && dist2d(P.pos, pilePos) < 1.4 && counter.collectT <= 0) {
       counter.collectT = 0.035;
       const bill = counter.pile.pop();
-      const value = counter.pile.length === 0 ? counter.pileValue : Math.min(counter.pileValue, ECONOMY.meatPrice);
+      const value = bill.value;
       counter.pileValue -= value;
-      const from = bill ? bill.getWorldPosition(V()) : pilePos.clone();
-      if (bill) scene.remove(bill);
-      fx.fly(bill || Models.makeCash(), from, () => player.pos.clone().setY(1.3), {
+      const from = bill.mesh.position.clone();
+      scene.remove(bill.mesh);
+      fx.fly(bill.mesh, from, () => player.pos.clone().setY(1.3), {
         duration: 0.22, arc: 0.8,
         onDone: () => { setCash(cash + value); hud.bumpCash(); fx.text(player.pos.clone().setY(2.4), `+$${value}`, 'cash', { life: 0.6, rise: 40 }); },
       });
@@ -739,7 +757,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     for (let i = 0; i < b.def.meat; i++) {
       const mesh = Models.makeMeat();
       const land = b.pos.clone().add(new THREE.Vector3((Math.random() - 0.5) * 2.2, 0.2, (Math.random() - 0.5) * 2.2));
-      resolve(land, 0.3, false);
+      resolve(land, 0.35, true); // never inside a wall, a building or a tree trunk (unreachable)
       fx.fly(mesh, b.pos.clone().setY(0.8), () => land, {
         duration: 0.45, arc: 1.6,
         onDone: (m) => { m.position.copy(land); scene.add(m); drops.push({ mesh: m, type: 'meat', pos: land, t: Math.random() * 6, claim: null }); },
@@ -1006,6 +1024,101 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     try { localStorage.removeItem(SAVE_KEY); } catch { /* ignore */ }
   }
 
+  // ---------- Guidance: what to do next, where it is, what each station does ----------
+  const goalMarker = Models.makeGoalMarker();
+  const dirArrow = Models.makeDirArrow();
+  goalMarker.visible = dirArrow.visible = false;
+  scene.add(goalMarker, dirArrow);
+  let goal = null, goalT = 0;
+
+  const padPos = (z) => new THREE.Vector3(z.def.x, 0, z.def.z);
+  const padName = (z) => (z.def.icon ? `${z.def.name} upgrade` : z.def.name);
+  const nearestTree = () => {
+    const p = player.pos;
+    const t = trees.filter((x) => x.alive).sort((a, b) => dist2d(a, p) - dist2d(b, p))[0];
+    return t ? new THREE.Vector3(t.x, 0, t.z) : null;
+  };
+
+  function computeGoal() {
+    const P = player, c = P.c;
+    if (P.dead) return null;
+    const logs = countOf(c, 'log'), meat = countOf(c, 'meat'), steaks = countOf(c, 'steak');
+    const bear = bears.filter((b) => !b.dying).sort((a, b) => dist2d(a.pos, P.pos) - dist2d(b.pos, P.pos))[0];
+    if (bear && dist2d(bear.pos, P.pos) < 6) return { icon: '🐻', text: 'Bears! Stay close to hit them. Low HP? Run back under your towers.' };
+
+    if (!counter.built) {
+      const z = zones.find((x) => x.def.id === 'counter');
+      const left = z.total - z.paid;
+      if (logs > 0 && (logs >= left || stackFree(c) <= 0)) return { icon: '🪵', text: 'Drop your wood on the SELL TABLE square', pos: padPos(z) };
+      return { icon: '🌲', text: `Walk next to a tree to chop it (wood: ${logs}/${left})`, pos: nearestTree() };
+    }
+    if (counter.pile.length) return { icon: '💵', text: 'Pick up your cash next to the sell table', pos: new THREE.Vector3(counter.pos.x + 1.5, 0, counter.pos.z + 0.3) };
+    if (meat && grill.built) return { icon: '🔥', text: 'Put raw meat on the GRILL: steaks sell for $12 instead of $5', pos: grill.pos.clone() };
+    if (grill.out > 0 && stackFree(c) > 0 && !helpers.some((h) => h.kind === 'cashier')) return { icon: '🍖', text: 'Grab the cooked steaks from the grill', pos: spots.grillOut() };
+    if (meat || steaks) return { icon: '🥩', text: 'Sell your meat at the SELL TABLE', pos: counter.pos.clone() };
+
+    const byLeft = (a, b) => (a.total - a.paid) - (b.total - b.paid);
+    const cashPads = [...zones, ...upgrades].filter((z) => z.state === 'open' && z.currency === 'cash');
+    const affordable = cashPads.filter((z) => cash >= z.total - z.paid).sort(byLeft)[0];
+    if (affordable) return { icon: '💵', text: `You can buy: ${padName(affordable)}. Stand on its square`, pos: padPos(affordable) };
+
+    const openLog = zones.filter((z) => z.state === 'open' && z.currency === 'log');
+    const logZone = openLog.find((z) => z.def.kind === 'grill') || openLog[0];
+    if (logZone && logs > 0) return { icon: '🪵', text: `Bring wood to the ${logZone.def.name} square`, pos: padPos(logZone) };
+    if (logZone && woodpile.count > 0) return { icon: '🪵', text: 'Grab wood from your wood storage', pos: woodpile.pos.clone() };
+    if (logZone) return { icon: '🌲', text: `Chop trees to build the ${logZone.def.name} (${logZone.total - logZone.paid} wood)`, pos: nearestTree() };
+
+    const next = cashPads.sort(byLeft)[0];
+    if (next) return { icon: '🐻', text: `Hunt bears for meat and sell it. Next: ${padName(next)} ($${next.total - next.paid})` };
+    return { icon: '🏆', text: 'Your camp is complete! Survive the waves.' };
+  }
+
+  // Small permanent labels explaining each station once it's built.
+  const stationLabels = [];
+  function stationLabel(html, getPos, visible = () => true) {
+    const el = document.createElement('div');
+    el.className = 'label station-label';
+    el.innerHTML = html;
+    labelsEl.appendChild(el);
+    stationLabels.push({ el, getPos, visible });
+  }
+  stationLabel('SELL TABLE<small>meat & spare wood → 💵</small>', () => counter.pos.clone().setY(2.6), () => counter.built);
+  stationLabel('💵 PICK UP', () => new THREE.Vector3(counter.pos.x + 1.5, 1.4, counter.pos.z + 0.3), () => counter.built && counter.pile.length > 0);
+  stationLabel('GRILL<small>raw meat → $12 steak</small>', () => grill.pos.clone().setY(2), () => grill.built);
+  stationLabel('WOOD STORAGE<small>your lumberjack fills it</small>', () => woodpile.pos.clone().setY(1.9), () => woodpile.built);
+
+  function updateGuidance(dt) {
+    goalT -= dt;
+    if (goalT <= 0) {
+      goalT = 0.25;
+      goal = computeGoal();
+      hud.setHint(goal ? goal.text : '', goal ? goal.icon : '');
+    }
+    const target = goal && goal.pos;
+    goalMarker.visible = !!target;
+    if (target) {
+      goalMarker.position.set(target.x, 0, target.z);
+      goalMarker.userData.cone.position.y = 2.4 + Math.abs(Math.sin(clock * 4)) * 0.45;
+      goalMarker.userData.ring.position.y = 0.16;
+      goalMarker.userData.ring.scale.setScalar(1 + Math.sin(clock * 4) * 0.08);
+    }
+    // ground arrow around the player when the goal is off to the side
+    const far = target && dist2d(target, player.pos) > 4;
+    dirArrow.visible = !!far && !player.dead;
+    if (far) {
+      const a = Math.atan2(target.x - player.pos.x, target.z - player.pos.z);
+      dirArrow.position.set(player.pos.x + Math.sin(a) * 1.5, 0.17, player.pos.z + Math.cos(a) * 1.5);
+      dirArrow.rotation.y = a + Math.PI;
+    }
+    for (const s of stationLabels) {
+      const show = s.visible();
+      s.el.style.display = show ? '' : 'none';
+      if (!show) continue;
+      const p = fx.toScreen(s.getPos());
+      s.el.style.left = p.x + 'px'; s.el.style.top = p.y + 'px';
+    }
+  }
+
   // ---------- Main update ----------
   let saveT = 5;
 
@@ -1193,6 +1306,8 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     fl[1].scale.y = 0.35 + Math.sin(clock * 21) * 0.06;
     campfire.userData.light.intensity = 5 + Math.sin(clock * 13) * 0.8;
 
+    updateGuidance(dt);
+
     saveT -= dt;
     if (saveT <= 0 && dt > 0) { saveT = 5; save(); }
   }
@@ -1235,5 +1350,9 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     set cash(v) { setCash(v); },
     get wave() { return waves.n; },
     skipToWave() { waves.timer = 0.01; },
+    // dev/test helpers
+    give(type, n = 1) { for (let i = 0; i < n && stackFree(player.c) > 0; i++) pushStack(player.c, type, makeItem(type)); },
+    count: (type) => countOf(player.c, type),
+    counter, logsNeeded,
   };
 }

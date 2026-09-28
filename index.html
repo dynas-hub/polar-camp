@@ -33,6 +33,10 @@
       <div id="wave-bar"><div id="wave-fill"></div></div>
     </div>
 
+    <button id="help-btn" aria-label="How to play">?</button>
+
+    <div id="hint" class="hidden"><span id="hint-ico"></span><span id="hint-text"></span></div>
+
     <div id="hp"><div id="hp-fill"></div></div>
 
     <div id="banner"></div>
@@ -49,9 +53,35 @@
 
     <div id="title-screen">
       <div class="logo">POLAR<br>CAMP</div>
-      <div class="tag">Chop. Build. Survive the bears.</div>
+      <div class="tag">Build your camp. Survive the bears.</div>
+      <div class="loop">
+        <div><span>🌲</span>Chop</div><i>›</i>
+        <div><span>🏗️</span>Build</div><i>›</i>
+        <div><span>🐻</span>Fight</div><i>›</i>
+        <div><span>💵</span>Sell</div>
+      </div>
       <button id="play">PLAY</button>
-      <div class="hint">Drag anywhere to move · WASD on desktop</div>
+      <button id="how" class="secondary">HOW TO PLAY</button>
+      <button id="new-game" class="link hidden">Start a new game</button>
+      <div class="hint">Drag anywhere to move · WASD on a computer</div>
+    </div>
+
+    <div id="help" class="hidden" role="dialog" aria-label="How to play">
+      <div class="help-card">
+        <div class="help-title">HOW TO PLAY</div>
+        <div class="help-list">
+          <div class="row"><span>🕹️</span><div><b>Move</b>Drag anywhere on the screen (WASD or arrows on a computer).</div></div>
+          <div class="row"><span>🌲</span><div><b>Chop</b>Walk next to a tree. The wood stacks up on your back.</div></div>
+          <div class="row"><span>⬜</span><div><b>Build</b>Dashed squares show a price in 🪵 wood or 💵 cash. Stand on one to pay, bit by bit.</div></div>
+          <div class="row"><span>🐻</span><div><b>Fight</b>Bears attack in waves. Stand close to hit them automatically. Towers shoot them for you.</div></div>
+          <div class="row"><span>🥩</span><div><b>Sell</b>Bring meat to the SELL TABLE, then grab the 💵 cash pile next to it. Spare wood sells for $1.</div></div>
+          <div class="row"><span>🔥</span><div><b>Grill</b>Raw meat sells for $5. Grill it first: a steak sells for $12.</div></div>
+          <div class="row"><span>👷</span><div><b>Workers</b>Hire a lumberjack, a hunter and a cashier to run the camp for you.</div></div>
+          <div class="row"><span>⬆️</span><div><b>Upgrades</b>AXE hits harder. BAG carries more. Prices go up each level.</div></div>
+        </div>
+        <div class="help-tip">💡 Stuck? Follow the <b>yellow arrow</b> and the tip at the bottom of the screen. Your progress saves automatically.</div>
+        <button id="help-close">GOT IT</button>
+      </div>
     </div>
   </div>
 

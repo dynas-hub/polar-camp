@@ -24,7 +24,8 @@ export function createRecorder(stage, gameCanvas, renderNow) {
     ctx.shadowOffsetY = 2 * scale;
     ctx.shadowBlur = 3 * scale;
     // pills are "icon + value" on one row; labels can span several lines
-    const text = el.classList.contains('pill') ? el.innerText.replace(/\s*\n\s*/g, ' ') : el.innerText;
+    const oneLine = el.classList.contains('pill') || el.id === 'hint';
+    const text = oneLine ? el.innerText.replace(/\s*\n\s*/g, ' ') : el.innerText;
     const lines = text.split('\n');
     const lh = parseFloat(cs.fontSize) * scale * 1.15;
     const cx = (r.left - sr.left + r.width / 2) * scale;
@@ -59,10 +60,10 @@ export function createRecorder(stage, gameCanvas, renderNow) {
     ctx.drawImage(gameCanvas, 0, 0);
     const sr = stage.getBoundingClientRect();
     const scale = gameCanvas.width / sr.width;
-    stage.querySelectorAll('.pill').forEach((p) => drawPill(p, sr, scale));
+    stage.querySelectorAll('.pill, #hint:not(.hidden)').forEach((p) => drawPill(p, sr, scale));
     drawBar(document.getElementById('wave-bar'), document.getElementById('wave-fill'), sr, scale, '#ffa43d');
     drawBar(document.getElementById('hp'), document.getElementById('hp-fill'), sr, scale, '#6fdc5e');
-    stage.querySelectorAll('.pill, #wave-title, .zone-label, .float-text, #banner').forEach((el) => drawText(el, sr, scale));
+    stage.querySelectorAll('.pill, #hint:not(.hidden), #wave-title, .zone-label, .station-label, .float-text, #banner').forEach((el) => drawText(el, sr, scale));
     return comp;
   }
 

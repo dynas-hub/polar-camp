@@ -439,6 +439,33 @@ export function setPadProgress(pad, p) {
   fill.position.z = s / 2 - (p * s) / 2;
 }
 
+// Guidance: a bouncing yellow marker above the current goal...
+export function makeGoalMarker() {
+  const g = new THREE.Group();
+  const yellow = new THREE.MeshBasicMaterial({ color: 0xffd34d });
+  const cone = new THREE.Mesh(G.cone, yellow);
+  cone.scale.set(0.38, 0.6, 0.38);
+  cone.rotation.x = Math.PI; // pointing down
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.75, 0.07, 8, 32), yellow);
+  ring.rotation.x = -Math.PI / 2;
+  ring.userData.ground = true;
+  g.add(cone, ring);
+  g.userData = { cone, ring };
+  return g;
+}
+
+// ...and a flat arrow on the ground next to the player pointing toward it.
+export function makeDirArrow() {
+  const shape = new THREE.Shape();
+  shape.moveTo(0, 0.55); shape.lineTo(0.38, 0); shape.lineTo(0.14, 0); shape.lineTo(0.14, -0.4);
+  shape.lineTo(-0.14, -0.4); shape.lineTo(-0.14, 0); shape.lineTo(-0.38, 0); shape.lineTo(0, 0.55);
+  const m = new THREE.Mesh(new THREE.ShapeGeometry(shape), new THREE.MeshBasicMaterial({ color: 0xffd34d, transparent: true, opacity: 0.9, depthWrite: false }));
+  m.rotation.x = -Math.PI / 2;
+  const g = new THREE.Group();
+  g.add(m);
+  return g;
+}
+
 export function makeHealthBar(width = 1, color = 0xff4d4d) {
   const g = new THREE.Group();
   const bg = new THREE.Mesh(new THREE.PlaneGeometry(width, 0.13), new THREE.MeshBasicMaterial({ color: 0x1d2b3a, transparent: true, opacity: 0.7, depthWrite: false }));

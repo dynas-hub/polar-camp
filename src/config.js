@@ -50,6 +50,7 @@ export const TOWER = { range: 8, fireRate: 0.8, damage: 1, arrowSpeed: 22 };
 export const ECONOMY = {
   meatPrice: 5,
   steakPrice: 12,    // cooked meat from the grill sells for more
+  logPrice: 1,       // spare wood (nothing left to build with it) sells at the table
   cookTime: 0.8,     // seconds per piece on the grill
   payTick: 0.05,     // seconds between items flying into a zone
   sellTick: 0.09,
