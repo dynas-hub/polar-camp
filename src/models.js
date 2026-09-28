@@ -272,6 +272,41 @@ export function makeWoodpileBase() {
   return g;
 }
 
+// Green meat from the poison bear: worthless raw, $30 once grilled.
+export function makeToxicMeat() {
+  const g = makeMeat();
+  const green = mat(0x7fd34e), pale = mat(0xd6f5b8);
+  g.children[0].material = green;
+  g.children[1].material = pale;
+  return g;
+}
+
+export function makeSpicySteak() {
+  const g = makeSteak();
+  g.children[0].material = mat(0xb33a1a);
+  g.add(part(G.cone, mat(0xff4a1c), 0.05, 0.16, 0.05, -0.12, 0.16, 0.06));  // little chili peppers
+  g.add(part(G.cone, mat(0xff8a1c), 0.05, 0.16, 0.05, 0.02, 0.16, -0.05));
+  return g;
+}
+
+export function makePlate() {
+  const g = new THREE.Group();
+  g.add(part(G.box, mat(0x8e9aa6), 0.62, 0.1, 0.38));
+  g.add(part(G.box, mat(0x5b6570), 0.5, 0.11, 0.06, 0, 0, 0));
+  g.userData.h = 0.12;
+  return g;
+}
+
+// Boss loot: a sack of cash picked up by walking over it.
+export function makeLootBag() {
+  const g = new THREE.Group();
+  g.add(part(G.sphere, mat(0xb07a3a), 0.38, 0.34, 0.38, 0, 0.34, 0));
+  g.add(part(G.cylLo, mat(0x7d4a22), 0.14, 0.14, 0.14, 0, 0.72, 0));
+  g.add(part(G.box, M.cash, 0.3, 0.05, 0.18, 0, 0.86, 0));
+  g.userData.h = 0.9;
+  return g;
+}
+
 export function makeCash() {
   const g = new THREE.Group();
   g.add(part(G.box, M.cash, 0.5, 0.07, 0.28));
@@ -281,11 +316,18 @@ export function makeCash() {
 }
 
 // ---------- Bears ----------
-export function makeBear(mega = false) {
+// variant: 'normal' | 'mega' | 'armored' | 'poison' | 'thrower'
+const furFor = {
+  normal: M.bear, mega: M.bearMega, armored: M.bear, thrower: mat(0xf1e9da),
+  poison: mat(0x9be36b),
+};
+
+export function makeBear(variant = 'normal') {
+  const mega = variant !== 'normal';
   const root = new THREE.Group();
   const body = new THREE.Group();
   root.add(body);
-  const fur = mega ? M.bearMega : M.bear;
+  const fur = furFor[variant] || M.bear;
   body.add(part(G.sphere, fur, 0.55, 0.48, 0.8, 0, 0.75, 0));
   const head = new THREE.Group();
   head.position.set(0, 0.95, 0.75);
@@ -304,8 +346,41 @@ export function makeBear(mega = false) {
     body.add(leg);
     legs.push(leg);
   }
-  root.userData = { body, head, legs };
+  const plates = [];
+  let heldLog = null;
+  if (variant === 'armored') {
+    const steel = mat(0x8e9aa6), rivet = mat(0x5b6570);
+    // helmet
+    head.add(part(G.sphere, steel, 0.39, 0.2, 0.41, 0, 0.14, -0.02));
+    head.add(part(G.box, rivet, 0.06, 0.06, 0.3, 0, 0.3, 0.1));
+    // three back plates, knocked off one by one by the axe
+    for (const z of [0.35, 0, -0.35]) {
+      const p = part(G.box, steel, 0.95, 0.12, 0.34, 0, 1.2, z);
+      p.rotation.x = z * 0.25;
+      body.add(p);
+      plates.push(p);
+    }
+  } else if (variant === 'poison') {
+    // droopy tongue + purple eyes
+    head.add(part(G.box, mat(0xb03a8c), 0.08, 0.03, 0.16, 0.05, -0.2, 0.46));
+    head.children.filter((c) => c.material === M.black || c.material === M.eyeRed).forEach((c) => { c.material = mat(0x7a2ea0); });
+  } else if (variant === 'thrower') {
+    // a lumberjack cap (stolen?) and a log held in its front paws
+    head.add(part(G.cyl, mat(0xc2473b), 0.3, 0.14, 0.3, 0, 0.3, 0));
+    head.add(part(G.box, mat(0xc2473b), 0.3, 0.04, 0.22, 0, 0.24, 0.28));
+    heldLog = makeLog();
+    heldLog.position.set(0, 1.15, 0.65);
+    heldLog.scale.setScalar(1.2);
+    body.add(heldLog);
+  }
+  root.userData = { body, head, legs, plates, heldLog };
   return root;
+}
+
+// Poison bear's death cloud: a translucent green blob that swells, then bursts.
+export function makeCloud() {
+  const m = new THREE.Mesh(G.sphereLo, new THREE.MeshBasicMaterial({ color: 0x8fe05a, transparent: true, opacity: 0.35, depthWrite: false }));
+  return m;
 }
 
 // ---------- Buildings ----------
@@ -335,6 +410,39 @@ export function makeTower() {
   head.add(part(G.box, M.steel, 0.05, 0.05, 0.4, 0, 0.07, 0.25));
   g.add(head);
   g.userData.head = head;
+  return g;
+}
+
+// Arrow tower turned ballista: raised on iron-banded posts, big steel bow, gold roof tip.
+export function makeBallista() {
+  const g = makeTower();
+  const iron = mat(0x4a525b), gold = mat(0xffc84a, { emissive: 0x4a3300 });
+  g.scale.y = 1.12;
+  for (const [x, z] of [[-0.5, -0.5], [0.5, -0.5], [-0.5, 0.5], [0.5, 0.5]]) {
+    g.add(part(G.box, iron, 0.2, 0.12, 0.2, x, 0.6, z));
+    g.add(part(G.box, iron, 0.2, 0.12, 0.2, x, 1.6, z));
+  }
+  g.add(part(G.cone, gold, 0.18, 0.4, 0.18, 0, 4.1, 0));
+  const head = g.userData.head;
+  head.clear();
+  head.add(part(G.box, iron, 0.2, 0.2, 1.1, 0, 0, 0.15));
+  const bowL = part(G.box, M.steel, 0.8, 0.08, 0.12, -0.42, 0, 0.62); bowL.rotation.y = -0.35;
+  const bowR = part(G.box, M.steel, 0.8, 0.08, 0.12, 0.42, 0, 0.62); bowR.rotation.y = 0.35;
+  head.add(bowL, bowR);
+  const bolt = part(G.cylLo, gold, 0.05, 0.9, 0.05, 0, 0.12, 0.3);
+  bolt.rotation.x = Math.PI / 2;
+  head.add(bolt);
+  g.userData.ballista = true;
+  return g;
+}
+
+// Heartwood: a glowing golden log, only dropped by the log thrower.
+export function makeHeartwood() {
+  const g = makeLog();
+  const gold = mat(0xffb933, { emissive: 0x5a3a00 });
+  g.children[0].material = gold;
+  g.children[1].material = g.children[2].material = mat(0xfff0b0, { emissive: 0x6b5a20 });
+  g.userData.h = 0.27;
   return g;
 }
 

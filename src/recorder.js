@@ -26,7 +26,17 @@ export function createRecorder(stage, gameCanvas, renderNow) {
     // pills are "icon + value" on one row; labels can span several lines
     const oneLine = el.classList.contains('pill') || el.id === 'hint';
     const text = oneLine ? el.innerText.replace(/\s*\n\s*/g, ' ') : el.innerText;
-    const lines = text.split('\n');
+    // wrap like the browser did: lines longer than the element's box are split on spaces
+    const maxW = Math.max(40, (r.width - 20) * scale);
+    const lines = [];
+    for (const raw of text.split('\n')) {
+      let cur = '';
+      for (const word of raw.split(' ')) {
+        const next = cur ? cur + ' ' + word : word;
+        if (cur && ctx.measureText(next).width > maxW) { lines.push(cur); cur = word; } else cur = next;
+      }
+      lines.push(cur);
+    }
     const lh = parseFloat(cs.fontSize) * scale * 1.15;
     const cx = (r.left - sr.left + r.width / 2) * scale;
     const cy = (r.top - sr.top + r.height / 2) * scale - ((lines.length - 1) * lh) / 2;
@@ -63,7 +73,10 @@ export function createRecorder(stage, gameCanvas, renderNow) {
     stage.querySelectorAll('.pill, #hint:not(.hidden)').forEach((p) => drawPill(p, sr, scale));
     drawBar(document.getElementById('wave-bar'), document.getElementById('wave-fill'), sr, scale, '#ffa43d');
     drawBar(document.getElementById('hp'), document.getElementById('hp-fill'), sr, scale, '#6fdc5e');
-    stage.querySelectorAll('.pill, #hint:not(.hidden), #wave-title, .zone-label, .station-label, .float-text, #banner').forEach((el) => drawText(el, sr, scale));
+    const show = (id) => !document.getElementById(id).classList.contains('hidden');
+    if (show('armor-bar')) drawBar(document.getElementById('armor-bar'), document.getElementById('armor-fill'), sr, scale, '#9fd0ff');
+    if (show('boss')) drawBar(document.getElementById('boss-bar'), document.getElementById('boss-fill'), sr, scale, '#ff5a3d');
+    stage.querySelectorAll('.pill, #hint:not(.hidden), #wave-title, #boss:not(.hidden) #boss-name, .zone-label, .station-label, .float-text, #banner').forEach((el) => drawText(el, sr, scale));
     return comp;
   }
 

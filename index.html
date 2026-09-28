@@ -31,12 +31,19 @@
     <div id="wave">
       <div id="wave-title">WAVE 1</div>
       <div id="wave-bar"><div id="wave-fill"></div></div>
+      <div id="boss" class="hidden">
+        <div id="boss-name"></div>
+        <div id="boss-bar"><div id="boss-fill"></div></div>
+      </div>
     </div>
+
+    <div id="poison" class="hidden"></div>
 
     <button id="help-btn" aria-label="How to play">?</button>
 
     <div id="hint" class="hidden"><span id="hint-ico"></span><span id="hint-text"></span></div>
 
+    <div id="armor-bar" class="hidden"><div id="armor-fill"></div></div>
     <div id="hp"><div id="hp-fill"></div></div>
 
     <div id="banner"></div>
@@ -78,6 +85,11 @@
           <div class="row"><span>🔥</span><div><b>Grill</b>Raw meat sells for $5. Grill it first: a steak sells for $12.</div></div>
           <div class="row"><span>👷</span><div><b>Workers</b>Hire a lumberjack, a hunter and a cashier to run the camp for you.</div></div>
           <div class="row"><span>⬆️</span><div><b>Upgrades</b>AXE hits harder. BAG carries more. Prices go up each level.</div></div>
+          <div class="row"><span>👑</span><div><b>Bosses</b>A boss comes every 5 waves and drops a bag of cash.</div></div>
+          <div class="row"><span>🛡️</span><div><b>Armored bear</b>Arrows bounce off. Break its plates with your axe, then bring the plates to the ARMOR square to forge your own armor.</div></div>
+          <div class="row"><span>🤢</span><div><b>Poison bear</b>Its bite poisons you: the campfire cures it. Step back when it dies. Grill its green meat for a $30 spicy steak.</div></div>
+          <div class="row"><span>🪵</span><div><b>Log thrower</b>It breaks your walls from afar: go out and hit it. Repair walls with wood on their REPAIR square.</div></div>
+          <div class="row"><span>🌟</span><div><b>Ballista</b>The log thrower drops heartwood. Heartwood + $250 turns an arrow tower into a ballista: 12 m reach, heavy bolts that crack armor.</div></div>
         </div>
         <div class="help-tip">💡 Stuck? Follow the <b>yellow arrow</b> and the tip at the bottom of the screen. Your progress saves automatically.</div>
         <button id="help-close">GOT IT</button>

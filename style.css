@@ -61,6 +61,27 @@ body.shorts #stage { aspect-ratio: 9 / 16; height: 100%; width: auto; max-width:
 #wave-bar { width: 130px; height: 9px; margin-top: 4px; background: rgba(20,35,50,.5); border-radius: 9px; overflow: hidden; }
 #wave-fill { height: 100%; width: 0; background: linear-gradient(90deg, #ffd34d, #ff7a3d); }
 
+/* narrow phones: move the wave/boss block to the right (next to "?") so it never covers the cash */
+@media (max-width: 460px) {
+  #wave { left: auto; right: 58px; transform: none; text-align: right; }
+  #wave-bar { margin-left: auto; }
+  #boss-bar { width: 150px; margin: 3px 0 0 auto; }
+}
+
+/* forged armor: thin steel-blue bar right above the hp bar */
+#armor-bar { position: absolute; bottom: calc(max(18px, env(safe-area-inset-bottom)) + 16px); left: 50%; transform: translateX(-50%); width: 160px; height: 7px; background: rgba(20,35,50,.5); border-radius: 7px; overflow: hidden; pointer-events: none; }
+#armor-fill { height: 100%; width: 0; background: linear-gradient(90deg, #7fb8ff, #c9e3ff); transition: width .15s; }
+
+/* boss health under the wave counter */
+#boss { margin-top: 8px; }
+#boss-name { color: #ffd34d; font-size: 13px; text-shadow: 0 2px 0 rgba(0,0,0,.4); }
+#boss-bar { width: 200px; height: 10px; margin: 3px auto 0; background: rgba(20,35,50,.6); border-radius: 10px; overflow: hidden; border: 2px solid rgba(255,211,77,.8); }
+#boss-fill { height: 100%; width: 100%; background: linear-gradient(90deg, #e2433b, #ff7a3d); transition: width .15s; }
+
+/* poisoned: green pulsing edges */
+#poison { position: absolute; inset: 0; pointer-events: none; box-shadow: inset 0 0 70px 10px rgba(120, 220, 60, .55); animation: poisonpulse 1s ease-in-out infinite; }
+@keyframes poisonpulse { 50% { box-shadow: inset 0 0 40px 4px rgba(120, 220, 60, .3); } }
+
 #hp { position: absolute; bottom: max(18px, env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); width: 160px; height: 12px; background: rgba(20,35,50,.5); border-radius: 12px; overflow: hidden; pointer-events: none; }
 #hp-fill { height: 100%; width: 100%; background: linear-gradient(90deg, #58d15a, #9bef6c); transition: width .15s; }
 
@@ -102,9 +123,9 @@ button:active { transform: translateY(3px); box-shadow: 0 2px 0 #b3531a; }
 #hint {
   /* centered, as wide as its text up to the screen width (left:50% would cap it at half) */
   position: absolute; left: 12px; right: 12px; margin: 0 auto; width: fit-content;
-  bottom: calc(max(18px, env(safe-area-inset-bottom)) + 22px);
+  bottom: calc(max(18px, env(safe-area-inset-bottom)) + 32px);
   display: flex; align-items: center; gap: 8px;
-  max-width: 520px; padding: 8px 14px 8px 10px;
+  max-width: min(520px, calc(100% - 24px)); padding: 8px 14px 8px 10px;
   background: rgba(20, 35, 50, .72); color: #fff; border-radius: 14px;
   font-family: system-ui, sans-serif; font-weight: 700; font-size: 14px; line-height: 1.25;
   pointer-events: none;

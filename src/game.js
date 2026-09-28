@@ -2,7 +2,7 @@
 // grill, hired workers, save/load.
 import * as THREE from 'three';
 import {
-  CAMP_HALF, PLAYER, TREE, BEAR, MEGA_BEAR, WAVES, TOWER, ECONOMY, ZONES, UPGRADES, HELPERS, WOODPILE,
+  CAMP_HALF, PLAYER, TREE, BEAR, BOSSES, POISON, WALL, ARMOR, WAVES, TOWER, BALLISTA, ECONOMY, ZONES, UPGRADES, HELPERS, WOODPILE,
 } from './config.js';
 import * as Models from './models.js';
 
@@ -64,6 +64,9 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     const d = TREE.minDist + Math.sqrt(rand()) * (TREE.maxDist - TREE.minDist);
     const x = Math.cos(a) * d, z = Math.sin(a) * d;
     if (Math.abs(x) < CAMP_HALF + 2.5 && Math.abs(z) < CAMP_HALF + 2.5) continue;
+    // keep the camp's outer corners clear: workers walk around the walls through them
+    const C = CAMP_HALF + 1.3;
+    if (Math.abs(Math.abs(x) - C) < 2.5 && Math.abs(Math.abs(z) - C) < 2.5) continue;
     if (trees.some((t) => Math.hypot(t.x - x, t.z - z) < TREE.spacing)) continue;
     const obj = Models.makeTree();
     const s = 0.85 + rand() * 0.35;
@@ -90,13 +93,20 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
   const stats = { kills: 0, logs: 0, sold: 0, cooked: 0 };
 
   // ---------- Carriers: anything with a stack on its back (player + workers) ----------
-  const makeItem = (type) => (type === 'log' ? Models.makeLog() : type === 'steak' ? Models.makeSteak() : Models.makeMeat());
+  const ITEM_MODELS = {
+    log: Models.makeLog, steak: Models.makeSteak, meat: Models.makeMeat, heartwood: Models.makeHeartwood,
+    toxic: Models.makeToxicMeat, spicy: Models.makeSpicySteak, plate: Models.makePlate, loot: Models.makeLootBag,
+  };
+  const makeItem = (type) => (ITEM_MODELS[type] || Models.makeMeat)();
+  const RAW = ['meat', 'toxic'];         // what the hunter carries and the grill accepts
+  const PRICE = { spicy: ECONOMY.spicyPrice, steak: ECONOMY.steakPrice, meat: ECONOMY.meatPrice, toxic: ECONOMY.toxicPrice, log: ECONOMY.logPrice };
 
   function makeCarrier(obj, capFn, isPlayer = false) {
     return { obj, stack: [], incoming: 0, cap: capFn, isPlayer, sellT: 0, actT: 0 };
   }
   const stackFree = (c) => c.cap() - c.stack.length - c.incoming;
   const countOf = (c, type) => c.stack.reduce((n, it) => n + (it.type === type), 0);
+  const rawCount = (c) => countOf(c, 'meat') + countOf(c, 'toxic');
 
   function layoutStack(c) {
     let y = 0;
@@ -144,13 +154,17 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
   }
 
   // ---------- Player ----------
-  const levels = { axe: 0, bag: 0 };
+  const levels = { axe: 0, bag: 0, armor: 0 };
+  const armorMax = () => levels.armor * ARMOR.perLevel;
   const player = {
     obj: Models.makePlayer(),
     pos: SPAWN.clone(),
     vel: V(),
     facing: Math.PI,
     hp: PLAYER.maxHp,
+    armor: 0,          // forged armor points, absorb hits before hp
+    poisonT: 0,        // seconds of poison left
+    poisonTick: 0,
     sinceHurt: 99,
     swingCd: 0,
     swingT: 1,
@@ -170,8 +184,9 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     currency: def.cost.logs ? 'log' : 'cash', payT: 0, pad: null, label: null, pop: 0,
   }));
   const upgrades = UPGRADES.map((def) => ({
-    def, state: 'locked', level: 0, paid: 0, total: def.base, currency: 'cash', payT: 0, pad: null, label: null, pop: 0,
+    def, state: 'locked', level: 0, paid: 0, total: def.base, currency: def.currency || 'cash', payT: 0, pad: null, label: null, pop: 0,
   }));
+  const CURRENCY_ICON = { log: '🪵', cash: '💵', plate: '🛡️' };
 
   function makeLabel() {
     const el = document.createElement('div');
@@ -193,7 +208,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
   }
 
   function refreshLabel(z) {
-    const icon = z.currency === 'log' ? '🪵' : '💵';
+    const icon = CURRENCY_ICON[z.currency];
     const left = Math.max(0, z.total - z.paid);
     const title = z.def.icon ? `${z.def.icon} ${z.def.name} LV${z.level + 1}` : z.def.name;
     z.label.innerHTML = `<div><span class="name">${title}</span>${icon} ${left}</div>`;
@@ -207,7 +222,8 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
   }
 
   const counter = { built: false, obj: null, pos: V(), pile: [], pileValue: 0, collectT: 0 };
-  const grill = { built: false, obj: null, pos: V(), queue: 0, cookT: 0, out: 0, visuals: [], smokeT: 0 };
+  // queue/out are counts; queueTypes/outTypes say what's cooking (meat → steak, toxic → spicy)
+  const grill = { built: false, obj: null, pos: V(), queue: 0, queueTypes: [], cookT: 0, out: 0, outTypes: [], visuals: [], smokeT: 0 };
   const woodpile = { built: false, obj: null, pos: new THREE.Vector3(WOODPILE.x, 0, WOODPILE.z), count: 0, visuals: [] };
   const towers = [];
   const arrows = [];
@@ -230,17 +246,18 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       obj = Models.makeTower();
       obj.position.set(d.x, 0.12, d.z);
       addBox(d.x, d.z, 0.62, 0.62);
-      towers.push({ obj, x: d.x, z: d.z, fireT: 0.5 });
+      towers.push({ obj, id: d.id, x: d.x, z: d.z, fireT: 0.5, ballista: false, range: TOWER.range, fireRate: TOWER.fireRate, damage: TOWER.damage, up: null });
     } else if (d.kind === 'wall') {
       const w = Models.makeWall(d.wall);
       obj = w.group;
       colliders.push(...w.colliders);
       wallColliders.push(...w.colliders);
+      walls.push({ side: d.wall, def: d, name: d.name, group: w.group, colliders: w.colliders, hp: WALL.hp, broken: false, pad: null, label: null, payT: 0 });
     } else if (d.kind === 'grill') {
       obj = Models.makeGrill();
       obj.position.set(d.x, 0.12, d.z);
       addBox(d.x, d.z, 0.75, 0.75);
-      addBox(d.x + 1.2, d.z, 0.5, 0.6);
+      // (no collider on the side tray: with the tower next to it, it formed a dead-end pocket)
       grill.built = true; grill.obj = obj; grill.pos.set(d.x, 0, d.z);
     } else if (d.kind === 'hire') {
       if (d.helper === 'lumberjack' && !woodpile.built) buildWoodpile(silent);
@@ -261,6 +278,88 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       save();
     }
     refreshUnlocks();
+  }
+
+  // ---------- Wall health (the log thrower damages walls; wood repairs them) ----------
+  const walls = [];
+
+  function damageWall(w, dmg) {
+    if (w.broken) return;
+    w.hp = Math.max(0, w.hp - dmg);
+    fx.burst(pointForWall(w.side).setY(1.2), 0xb57a3f, 10, { speed: 4, up: 4, size: 0.14 });
+    fx.addShake(0.1);
+    if (w.hp <= 0) {
+      // a breach: bears walk through until it's repaired
+      w.broken = true;
+      w.group.visible = false;
+      for (const c of w.colliders) {
+        colliders.splice(colliders.indexOf(c), 1);
+        wallColliders.splice(wallColliders.indexOf(c), 1);
+      }
+      fx.burst(pointForWall(w.side).setY(1), 0xd09a5e, 30, { speed: 6, up: 5, size: 0.2 });
+      fx.text(pointForWall(w.side).setY(3), `${w.name} BROKEN!`, 'hurt', { life: 1.6, rise: 80 });
+      events.push({ type: 'wallBroken', side: w.side, t: clock });
+    }
+    wallLook(w);
+  }
+
+  function repairWall(w, amount) {
+    const wasBroken = w.broken;
+    w.hp = Math.min(WALL.hp, w.hp + amount);
+    if (wasBroken && w.hp > 0) {
+      w.broken = false;
+      w.group.visible = true;
+      colliders.push(...w.colliders);
+      wallColliders.push(...w.colliders);
+      fx.text(pointForWall(w.side).setY(3), `${w.name} REBUILT!`, 'warn', { life: 1.3, rise: 70 });
+    }
+    wallLook(w);
+  }
+
+  // Damaged walls lean: stakes tilt more as hp drops.
+  function wallLook(w) {
+    const dmg = 1 - w.hp / WALL.hp;
+    w.group.children.forEach((s, i) => {
+      if (!s.userData.tilt) s.userData.tilt = ((i * 7919) % 13) / 13 - 0.5;
+      s.rotation.z = s.userData.tilt * dmg * 0.7;
+      s.rotation.x = s.userData.tilt * dmg * 0.4;
+    });
+  }
+
+  // A REPAIR square appears on the wall's build spot whenever it's damaged.
+  function updateWalls(dt) {
+    for (const w of walls) {
+      const damaged = w.hp < WALL.hp;
+      if (damaged && !w.pad) {
+        w.pad = Models.makePad(0xffa640);
+        w.pad.position.set(w.def.x, 0, w.def.z);
+        scene.add(w.pad);
+        w.label = makeLabel();
+      }
+      if (!damaged && w.pad) {
+        scene.remove(w.pad); w.label.remove();
+        w.pad = null; w.label = null;
+        continue;
+      }
+      if (!w.pad) continue;
+      const need = Math.ceil((WALL.hp - w.hp) / WALL.repairPerLog);
+      w.label.innerHTML = `<div><span class="name">REPAIR ${w.name}</span>🪵 ${need}</div>`;
+      Models.setPadProgress(w.pad, w.hp / WALL.hp);
+      const s = fx.toScreen(new THREE.Vector3(w.def.x, 0.2, w.def.z + 0.2));
+      w.label.style.left = s.x + 'px'; w.label.style.top = s.y + 'px';
+      // standing on it with wood: one log = +10 hp
+      const on = Math.abs(player.pos.x - w.def.x) < Models.PAD_SIZE / 2 + 0.15 && Math.abs(player.pos.z - w.def.z) < Models.PAD_SIZE / 2 + 0.15;
+      w.payT -= dt;
+      if (on && !player.dead && w.payT <= 0) {
+        const it = popStack(player.c, 'log');
+        if (it) {
+          w.payT = ECONOMY.payTick * 2;
+          fx.fly(it.mesh, it.worldPos, () => pointForWall(w.side).setY(0.8), { duration: 0.35, arc: 1.6 });
+          repairWall(w, WALL.repairPerLog);
+          learn('repair');
+        }
+      }
+    }
   }
 
   function buildWoodpile(silent) {
@@ -291,9 +390,10 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     if (z.payT > 0) return;
     z.payT = ECONOMY.payTick;
     const target = new THREE.Vector3(z.def.x, 0.3, z.def.z);
-    if (z.currency === 'log') {
+    if (z.currency !== 'cash') {
+      // paid with items from the back: logs, or armor plates for the ARMOR pad
       if (z.paid >= z.total) return;
-      const it = popStack(player.c, 'log');
+      const it = popStack(player.c, z.currency);
       if (!it) return;
       z.paid++;
       fx.fly(it.mesh, it.worldPos, () => target, { duration: 0.28, arc: 1.4 });
@@ -331,8 +431,9 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     fx.text(player.pos.clone().setY(2.6), `${u.def.name} LV${u.level + 1}!`, 'warn', { life: 1.2, rise: 80 });
     fx.addShake(0.15);
     events.push({ type: 'upgrade', id: u.def.id, level: u.level, t: clock });
-    learn('buy');
+    learn(u.currency === 'plate' ? 'forge' : 'buy');
     if (u.def.id === 'bag') layoutStack(player.c);
+    if (u.def.id === 'armor') player.armor = armorMax(); // freshly forged: full armor
     applyLevel(u);
     save();
   }
@@ -423,13 +524,20 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     if (!silent) fx.burst(at.clone().setY(1), 0xffd34d, 14, { speed: 4, up: 4, size: 0.14 });
   }
 
+  const CAMP_CENTER = new THREE.Vector3(0.5, 0, 2.2);
+
   // Unstick: if an AI-driven walker barely moves while trying to, sidestep for a moment.
   // Returns the (possibly deflected) unit direction.
+  // Detour modes, tried in turn while still stuck: sidestep one way, the other way, then back
+  // up (the only way out of a dead-end pocket, e.g. between the grill tray and a tower).
   function steer(ent, dx, dz) {
     if (ent.detourT > 0) {
-      const s = ent.detourSign;
-      const px = -dz * s, pz = dx * s;
-      const x = px * 0.85 + dx * 0.15, z = pz * 0.85 + dz * 0.15;
+      let x, z;
+      if (ent.detourMode === 2) { x = -dx - dz * 0.3; z = -dz + dx * 0.3; } else {
+        const s = ent.detourMode === 0 ? 1 : -1;
+        const px = -dz * s, pz = dx * s;
+        x = px * 0.85 + dx * 0.15; z = pz * 0.85 + dz * 0.15;
+      }
       const l = Math.hypot(x, z) || 1;
       return [x / l, z / l];
     }
@@ -438,20 +546,27 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
 
   function trackStuck(ent, beforeX, beforeZ, intended, dt) {
     ent.detourT = Math.max(0, (ent.detourT || 0) - dt);
+    ent.rescueT = Math.max(0, (ent.rescueT || 0) - dt);
     const moved = Math.hypot(ent.pos.x - beforeX, ent.pos.z - beforeZ);
     if (intended > 0.001 && moved < intended * 0.3) ent.stuckT = (ent.stuckT || 0) + dt;
     else ent.stuckT = 0;
+    // real progress for a second clears the streak of failed detours
+    if (moved >= intended * 0.6) { ent.okT = (ent.okT || 0) + dt; if (ent.okT > 1) ent.streak = 0; } else ent.okT = 0;
     if (ent.stuckT > 0.25 && !(ent.detourT > 0)) {
       ent.stuckT = 0;
-      ent.detourT = 0.6;
-      ent.detourSign = ent.detourSign === 1 ? -1 : 1; // alternate sides if still stuck
+      ent.detourMode = ((ent.detourMode ?? -1) + 1) % 3;
+      ent.detourT = ent.detourMode === 2 ? 0.9 : 0.6;
+      // safety net: ~5 s of failed detours → drop the errand and head for the camp center a moment
+      ent.streak = (ent.streak || 0) + 1;
+      if (ent.streak >= 7) { ent.streak = 0; ent.rescueT = 1.5; ent.giveUp = true; }
     }
   }
 
   // Move toward a point (routing around walls). Returns true when arrived.
   function walkTo(h, dest, dt, arriveDist = 0.35) {
-    if (dist2d(h.pos, dest) < arriveDist) { h.moving = false; return true; }
-    const step = routeTarget(h.pos, dest);
+    if (h.rescueT > 0) dest = CAMP_CENTER; // safety net (see trackStuck)
+    else if (dist2d(h.pos, dest) < arriveDist) { h.moving = false; return true; }
+    const step = h.rescueT > 0 ? dest : routeTarget(h.pos, dest);
     const bx = h.pos.x, bz = h.pos.z;
     let dx = step.x - h.pos.x, dz = step.z - h.pos.z;
     const l = Math.hypot(dx, dz);
@@ -464,6 +579,12 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     }
     resolve(h.pos, 0.38, true);
     trackStuck(h, bx, bz, intended, dt);
+    // pacing detector: walking for 4 s without getting 0.8 m away from where it started
+    // (back-and-forth between two waypoints) → same safety net as being stuck
+    if (!h.anchor) h.anchor = { x: h.pos.x, z: h.pos.z, t: 0 };
+    h.anchor.t += dt;
+    if (Math.hypot(h.pos.x - h.anchor.x, h.pos.z - h.anchor.z) > 0.8) h.anchor = { x: h.pos.x, z: h.pos.z, t: 0 };
+    else if (h.anchor.t > 4 && !(h.rescueT > 0)) { h.rescueT = 1.5; h.giveUp = true; h.anchor.t = 0; }
     h.moving = true;
     return false;
   }
@@ -481,6 +602,11 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
 
   function updateHelper(h, dt) {
     const c = h.c;
+    if (h.giveUp) {
+      // the safety net fired: forget this errand for a while (tree or meat)
+      h.giveUp = false;
+      if (h.target) { h.target.claim = null; h.target.skipUntil = clock + 15; h.target = null; }
+    }
     c.actT -= dt;
     h.moving = false;
 
@@ -521,7 +647,8 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     if (h.kind === 'carrier') {
       const drop = h.target && drops.includes(h.target) ? h.target : null;
       if (!drop) h.target = null;
-      const pickable = drops.filter((d) => (!d.claim || d.claim === h) && !(d.skipUntil > clock));
+      // the hunter only handles meat (raw or toxic); plates, logs and loot are for the player
+      const pickable = drops.filter((d) => RAW.includes(d.type) && (!d.claim || d.claim === h) && !(d.skipUntil > clock));
       if (stackFree(c) > 0 && pickable.length && h.state !== 'deliver') {
         if (!h.target) {
           h.target = pickable.sort((a, b) => dist2d(a.pos, h.pos) - dist2d(b.pos, h.pos))[0] || null;
@@ -537,14 +664,14 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
         // grab anything within arm's reach on the way, not just the target
         for (let i = drops.length - 1; i >= 0 && stackFree(c) > 0; i--) {
           const d = drops[i];
-          if (dist2d(d.pos, h.pos) > 1.1 || (d.claim && d.claim !== h)) continue;
+          if (!RAW.includes(d.type) || dist2d(d.pos, h.pos) > 1.1 || (d.claim && d.claim !== h)) continue;
           drops.splice(i, 1);
           scene.remove(d.mesh);
-          collectToBack(c, 'meat', d.mesh.position.clone(), d.mesh);
+          collectToBack(c, d.type, d.mesh.position.clone(), d.mesh);
           if (d === h.target) h.target = null;
         }
         if (h.target) walkTo(h, h.target.pos, dt, 0.6);
-      } else if (countOf(c, 'meat') > 0) {
+      } else if (rawCount(c) > 0) {
         if (h.target) { h.target.claim = null; h.target = null; } // release the reservation
         h.state = 'deliver';
         const dest = grill.built ? spots.grillIn() : spots.counter();
@@ -558,7 +685,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     }
 
     if (h.kind === 'cashier') {
-      const has = countOf(c, 'steak') + countOf(c, 'meat');
+      const has = countOf(c, 'steak') + countOf(c, 'spicy') + countOf(c, 'meat');
       if (h.state === 'deliver' || (has > 0 && (stackFree(c) <= 0 || grill.out === 0))) {
         h.state = 'deliver';
         if (walkTo(h, spots.counter(), dt, 0.5)) {
@@ -617,18 +744,20 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
   // ---------- Grill ----------
   function feedGrill(c) {
     if (c.actT > 0) return;
-    const it = popStack(c, 'meat');
+    const type = countOf(c, 'toxic') ? 'toxic' : 'meat'; // toxic first: it's the valuable one once cooked
+    const it = popStack(c, type);
     if (!it) return;
     c.actT = 0.08;
-    if (c === player.c) learn('grill');
+    if (c === player.c) learn(type === 'toxic' ? 'toxic' : 'grill');
     const top = grill.pos.clone().setY(0.8);
-    fx.fly(it.mesh, it.worldPos, () => top, { duration: 0.25, arc: 1, onDone: () => { grill.queue++; } });
+    fx.fly(it.mesh, it.worldPos, () => top, { duration: 0.25, arc: 1, onDone: () => { grill.queue++; grill.queueTypes.push(type); } });
   }
 
   function takeFromGrill(c) {
     if (c.actT > 0 || grill.out <= 0 || stackFree(c) <= 0) return;
     c.actT = 0.08;
     grill.out--;
+    const type = grill.outTypes.pop() || 'steak';
     if (c === player.c) learn('grillTake');
     const from = grill.pos.clone().add(new THREE.Vector3(1.2, 0.7, 0));
     if (grill.visuals.length > grill.out) {
@@ -636,7 +765,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       from.copy(v.position);
       scene.remove(v);
     }
-    collectToBack(c, 'steak', from);
+    collectToBack(c, type, from);
   }
 
   function updateGrill(dt) {
@@ -655,11 +784,13 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     if (grill.cookT >= ECONOMY.cookTime) {
       grill.cookT = 0;
       grill.queue--;
+      const cooked = grill.queueTypes.shift() === 'toxic' ? 'spicy' : 'steak';
       grill.out++;
+      grill.outTypes.push(cooked);
       stats.cooked++;
       if (grill.visuals.length < 12) {
         const i = grill.visuals.length;
-        const s = Models.makeSteak();
+        const s = makeItem(cooked);
         s.position.set(grill.pos.x + 1.2 + ((i % 2) - 0.5) * 0.4, 0.72 + Math.floor(i / 2) * 0.12, grill.pos.z + (Math.floor(i / 2) % 3 - 1) * 0.02);
         s.rotation.y = Math.PI / 2;
         scene.add(s);
@@ -676,19 +807,25 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
   function sellFrom(c, dt) {
     c.sellT -= dt;
     if (c.sellT > 0) return;
-    // meat first (steaks, then raw); then any wood nothing can use anymore, so the bag never gets stuck full
-    let type = countOf(c, 'steak') ? 'steak' : countOf(c, 'meat') ? 'meat' : null;
+    // most valuable first; raw toxic meat only when there's no grill to cook it (it sells for $0);
+    // then any wood nothing can use anymore, so the bag never gets stuck full
+    let type = ['spicy', 'steak', 'meat'].find((t) => countOf(c, t)) || null;
+    if (!type && countOf(c, 'toxic') && !grill.built) type = 'toxic';
     if (!type && c.isPlayer && countOf(c, 'log') > logsNeeded()) type = 'log';
     if (!type) return;
     const it = popStack(c, type);
     if (!it) return;
     c.sellT = ECONOMY.sellTick;
-    const price = type === 'steak' ? ECONOMY.steakPrice : type === 'meat' ? ECONOMY.meatPrice : ECONOMY.logPrice;
-    if (c.isPlayer) learn(type === 'log' ? 'spareWood' : 'sell');
+    const price = PRICE[type];
+    if (c.isPlayer && type !== 'toxic') learn(type === 'log' ? 'spareWood' : 'sell');
     const top = counter.pos.clone().setY(1.1);
     fx.fly(it.mesh, it.worldPos, () => top, {
       duration: 0.25, arc: 1,
-      onDone: () => { addToPile(price); stats.sold++; },
+      onDone: () => {
+        stats.sold++;
+        if (price > 0) addToPile(price);
+        else fx.text(top.clone().setY(2), '$0 yuck!', 'hurt', { life: 0.8, rise: 40 });
+      },
     });
   }
 
@@ -728,31 +865,71 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
   const bears = [];
   const drops = [];
 
-  function spawnBear(mega) {
-    const def = mega ? MEGA_BEAR : BEAR;
+  const clouds = [];      // poison bear death clouds
+  const thrown = [];      // logs in flight from log throwers
+
+  // kind: 'normal' or a BOSSES key. hpMult scales late waves.
+  function spawnBear(kind, hpMult = 1) {
+    const boss = kind !== 'normal';
+    const def = boss ? BOSSES[kind] : BEAR;
     const a = -Math.PI / 2 + (Math.random() - 0.5) * 2.4; // mostly from the north
-    const obj = Models.makeBear(mega);
+    const obj = Models.makeBear(kind);
     obj.scale.setScalar(def.scale);
     const pos = new THREE.Vector3(Math.cos(a) * WAVES.spawnRadius, 0, Math.sin(a) * WAVES.spawnRadius);
     obj.position.copy(pos);
-    const bar = Models.makeHealthBar(mega ? 1.6 : 1, 0xff4d4d);
+    const bar = Models.makeHealthBar(boss ? 1.6 : 1, 0xff4d4d);
     bar.visible = false;
     scene.add(obj, bar);
-    bears.push({ obj, pos, def, mega, hp: def.hp, attackT: def.attackRate, bar, flash: 0, lunge: 0, walkT: Math.random() * 6, dying: 0, vel: V() });
+    let armorBar = null;
+    if (def.armor) { armorBar = Models.makeHealthBar(1.6, 0xb8c7d6); scene.add(armorBar); }
+    const maxHp = Math.round(def.hp * hpMult);
+    const maxArmor = def.armor ? Math.round(def.armor * hpMult) : 0;
+    bears.push({
+      obj, pos, def, kind, boss, hp: maxHp, maxHp, armor: maxArmor, maxArmor, armorBar,
+      attackT: def.attackRate, throwT: def.throwEvery || 0, bubbleT: 0,
+      bar, flash: 0, lunge: 0, walkT: Math.random() * 6, dying: 0, vel: V(),
+    });
   }
 
-  function hurtBear(b, dmg, from) {
+  // `from` is the player's position for axe hits, null for tower shots.
+  // `pierce` = heavy ballista bolt: cracks armor instead of bouncing off.
+  function hurtBear(b, dmg, from, pierce = false) {
     if (b.dying) return;
+    const at = b.pos.clone().setY(1 * b.def.scale);
+    b.bar.visible = true;
+    if (b.armor > 0) {
+      if (!from && !pierce) {
+        // arrows bounce off the plates
+        fx.burst(at.clone().setY(1.2 * b.def.scale), 0xfff3a0, 4, { speed: 3, up: 2, size: 0.06 });
+        if (Math.random() < 0.35) fx.text(at.clone().setY(2 * b.def.scale), 'tink', 'warn', { life: 0.5, rise: 30 });
+        return;
+      }
+      // the axe (or a ballista bolt) breaks the armor first
+      b.armor = Math.max(0, b.armor - (from ? dmg : BALLISTA.armorDamage));
+      b.flash = 0.1;
+      fx.burst(at.clone().setY(1.3 * b.def.scale), 0xc9d3dc, 6, { speed: 4, up: 3, size: 0.1 });
+      const left = Math.ceil(b.armor / (b.maxArmor / b.def.plates));
+      const plates = b.obj.userData.plates;
+      while (plates.length > left) {
+        const p = plates.pop();
+        const wp = p.getWorldPosition(V());
+        p.parent.remove(p);
+        const fall = b.pos.clone().add(new THREE.Vector3((Math.random() - 0.5) * 3, 0.1, (Math.random() - 0.5) * 3));
+        fx.fly(p, wp, () => fall, { duration: 0.5, arc: 2, onDone: () => {} });
+        fx.text(at.clone().setY(2.3 * b.def.scale), b.armor > 0 ? 'CRACK!' : 'ARMOR BROKEN!', 'warn', { life: 1, rise: 60 });
+        fx.addShake(0.15);
+      }
+      if (b.armorBar) Models.setHealth(b.armorBar, b.armor / b.maxArmor);
+      return;
+    }
     b.hp -= dmg;
     b.flash = 0.12;
-    b.bar.visible = true;
-    Models.setHealth(b.bar, b.hp / b.def.hp);
-    const at = b.pos.clone().setY(1 * b.def.scale);
+    Models.setHealth(b.bar, b.hp / b.maxHp);
     fx.burst(at, 0xffffff, 5, { speed: 3, up: 3 });
     fx.burst(at, 0xe04848, 3, { speed: 3, up: 3, size: 0.09 });
     fx.text(at.clone().setY(1.8 * b.def.scale), String(dmg), 'hurt', { life: 0.6, rise: 40 });
     if (from) {
-      tmpA.subVectors(b.pos, from).setY(0).normalize().multiplyScalar(b.mega ? 0.15 : 0.45);
+      tmpA.subVectors(b.pos, from).setY(0).normalize().multiplyScalar(b.boss ? 0.15 : 0.45);
       b.pos.add(tmpA);
     }
     if (b.hp <= 0) {
@@ -761,23 +938,41 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     }
   }
 
+  // Throw an item out of `from` onto the ground as a pickup (`value` for loot bags).
+  function dropItem(type, from, spread = 2.2, value = 0) {
+    const mesh = makeItem(type);
+    const land = from.clone().add(new THREE.Vector3((Math.random() - 0.5) * spread, 0.2, (Math.random() - 0.5) * spread));
+    land.y = 0.2;
+    // never inside or hugging a wall, a building or a tree trunk: leave room to walk up to it
+    resolve(land, 0.8, true);
+    fx.fly(mesh, from.clone().setY(0.8), () => land, {
+      duration: 0.45, arc: 1.6,
+      onDone: (m) => { m.position.copy(land); scene.add(m); drops.push({ mesh: m, type, value, pos: land, t: Math.random() * 6, claim: null }); },
+    });
+  }
+
   function killBear(b) {
     b.dying = 0.001;
     b.bar.visible = false;
-    fx.burst(b.pos.clone().setY(0.8), 0xffffff, b.mega ? 30 : 14, { speed: 5, up: 5, size: 0.2 });
-    fx.addShake(b.mega ? 0.5 : 0.12);
-    if (b.mega) fx.text(b.pos.clone().setY(3), 'MEGA BEAR DOWN!', 'warn', { life: 1.5, rise: 90 });
-    events.push({ type: 'kill', mega: b.mega, t: clock });
+    if (b.armorBar) b.armorBar.visible = false;
+    fx.burst(b.pos.clone().setY(0.8), 0xffffff, b.boss ? 30 : 14, { speed: 5, up: 5, size: 0.2 });
+    fx.addShake(b.boss ? 0.5 : 0.12);
+    if (b.boss) fx.text(b.pos.clone().setY(3), `${b.def.name} DOWN!`, 'warn', { life: 1.5, rise: 90 });
+    events.push({ type: 'kill', kind: b.kind, t: clock });
     stats.kills++;
-    for (let i = 0; i < b.def.meat; i++) {
-      const mesh = Models.makeMeat();
-      const land = b.pos.clone().add(new THREE.Vector3((Math.random() - 0.5) * 2.2, 0.2, (Math.random() - 0.5) * 2.2));
-      // never inside or hugging a wall, a building or a tree trunk: leave room to walk up to it
-      resolve(land, 0.8, true);
-      fx.fly(mesh, b.pos.clone().setY(0.8), () => land, {
-        duration: 0.45, arc: 1.6,
-        onDone: (m) => { m.position.copy(land); scene.add(m); drops.push({ mesh: m, type: 'meat', pos: land, t: Math.random() * 6, claim: null }); },
-      });
+    for (let i = 0; i < (b.def.meat || 0); i++) dropItem('meat', b.pos);
+    for (let i = 0; i < (b.def.toxic || 0); i++) dropItem('toxic', b.pos);
+    for (let i = 0; i < (b.def.plateDrops || 0); i++) dropItem('plate', b.pos, 1.6);
+    for (let i = 0; i < (b.def.heartwood || 0); i++) dropItem('heartwood', b.pos, 1.2);
+    if (b.def.cash) dropItem('loot', b.pos, 1, b.def.cash);
+    if (b.kind === 'poison') {
+      // swells, then bursts into a poison cloud: step back!
+      const mesh = Models.makeCloud();
+      mesh.position.copy(b.pos).setY(0.8);
+      mesh.scale.setScalar(0.5);
+      scene.add(mesh);
+      clouds.push({ mesh, pos: b.pos.clone(), t: 0, burst: false });
+      fx.text(b.pos.clone().setY(3.5), 'STEP BACK!', 'hurt', { life: 1, rise: 50 });
     }
   }
 
@@ -791,18 +986,37 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
         const k = Math.min(1, b.dying / 0.3);
         b.obj.scale.setScalar(b.def.scale * (1 - k));
         b.obj.rotation.z = k * 1.2;
-        if (k >= 1) { scene.remove(b.obj, b.bar); bears.splice(i, 1); }
+        if (k >= 1) { scene.remove(b.obj, b.bar); if (b.armorBar) scene.remove(b.armorBar); bears.splice(i, 1); }
         continue;
       }
       const toP = tmpA.subVectors(P.pos, b.pos).setY(0);
       const dist = toP.length();
       const reach = b.def.radius + PLAYER.radius + 0.35;
       let moving = false;
-      if (!P.dead && dist > reach) {
+      let faceX = P.pos.x, faceZ = P.pos.z;
+      // Log thrower: keeps its distance from the walls and lobs logs at them
+      // (or at you when there's no wall standing). Come close and it fights back.
+      const aim = b.kind === 'thrower' && !P.dead && dist > 5 ? throwerAim(b) : null;
+      if (aim) {
+        const dA = dist2d(b.pos, aim.point);
+        faceX = aim.point.x; faceZ = aim.point.z;
+        if (dA > b.def.range) {
+          b.vel.set(aim.point.x - b.pos.x, 0, aim.point.z - b.pos.z).normalize().multiplyScalar(b.def.speed);
+          moving = true;
+        } else {
+          b.vel.set(0, 0, 0);
+          b.throwT -= dt;
+          if (b.throwT <= 0) { b.throwT = b.def.throwEvery; b.lunge = 1; throwLog(b, aim); }
+        }
+      } else if (!P.dead && dist > reach) {
         toP.normalize();
         b.vel.copy(toP).multiplyScalar(b.def.speed);
         moving = true;
       } else b.vel.set(0, 0, 0);
+      if (b.kind === 'poison') {
+        b.bubbleT -= dt;
+        if (b.bubbleT <= 0) { b.bubbleT = 0.25; fx.burst(b.pos.clone().setY(1.2 * b.def.scale), 0x9be36b, 1, { speed: 0.5, up: 2.5, size: 0.14, life: 0.7 }); }
+      }
       // separation from other bears
       for (const o of bears) {
         if (o === b || o.dying) continue;
@@ -816,7 +1030,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       }
       b.pos.addScaledVector(b.vel, dt);
       resolve(b.pos, b.def.radius, false);
-      if (dist > 0.01) b.obj.rotation.y = lerpAngle(b.obj.rotation.y, Math.atan2(P.pos.x - b.pos.x, P.pos.z - b.pos.z), Math.min(1, dt * 8));
+      if (Math.hypot(faceX - b.pos.x, faceZ - b.pos.z) > 0.01) b.obj.rotation.y = lerpAngle(b.obj.rotation.y, Math.atan2(faceX - b.pos.x, faceZ - b.pos.z), Math.min(1, dt * 8));
 
       if (!P.dead && dist <= reach + 0.1) {
         b.attackT -= dt;
@@ -824,6 +1038,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
           b.attackT = b.def.attackRate;
           b.lunge = 1;
           hurtPlayer(b.def.damage);
+          if (b.kind === 'poison') poisonPlayer(POISON.bite);
         }
       } else b.attackT = Math.min(b.attackT, b.def.attackRate * 0.5);
 
@@ -837,16 +1052,133 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       b.obj.position.copy(b.pos);
       b.bar.position.set(b.pos.x, 2 * b.def.scale, b.pos.z);
       b.bar.quaternion.copy(camera.quaternion);
+      if (b.armorBar) {
+        b.armorBar.visible = b.armor > 0 && b.bar.visible;
+        b.armorBar.position.set(b.pos.x, 2 * b.def.scale + 0.18, b.pos.z);
+        b.armorBar.quaternion.copy(camera.quaternion);
+      }
+      if (b.obj.userData.heldLog) b.obj.userData.heldLog.visible = b.throwT > 0.8; // log leaves its paws when thrown
+    }
+    updateThrown(dt);
+    updateClouds(dt);
+  }
+
+  // Closest point on a standing wall (or the player if no wall is up).
+  function throwerAim(b) {
+    let best = null, bestD = Infinity;
+    for (const w of walls) {
+      if (w.broken) continue;
+      for (const c of w.colliders) {
+        const x = THREE.MathUtils.clamp(b.pos.x, c.minX, c.maxX);
+        const z = THREE.MathUtils.clamp(b.pos.z, c.minZ, c.maxZ);
+        const d = Math.hypot(b.pos.x - x, b.pos.z - z);
+        if (d < bestD) { bestD = d; best = { point: new THREE.Vector3(x, 0, z), wall: w }; }
+      }
+    }
+    return best || { point: player.pos.clone(), wall: null };
+  }
+
+  function throwLog(b, aim) {
+    const mesh = Models.makeLog();
+    mesh.scale.setScalar(1.3);
+    const from = b.pos.clone().setY(1.6 * b.def.scale);
+    // aim at where the player is now (they can dodge), or at the wall
+    const to = aim.point.clone().setY(0.6);
+    mesh.position.copy(from);
+    scene.add(mesh);
+    thrown.push({ mesh, from, to, t: 0, dur: 1.1, wall: aim.wall, dmg: b.def.wallDamage, hit: b.def.hitDamage });
+  }
+
+  function updateThrown(dt) {
+    for (let i = thrown.length - 1; i >= 0; i--) {
+      const l = thrown[i];
+      l.t += dt / l.dur;
+      const k = Math.min(1, l.t);
+      l.mesh.position.lerpVectors(l.from, l.to, k);
+      l.mesh.position.y += Math.sin(k * Math.PI) * 4;
+      l.mesh.rotation.x += dt * 10;
+      if (k < 1) continue;
+      scene.remove(l.mesh);
+      thrown.splice(i, 1);
+      fx.burst(l.to.clone(), 0xb57a3f, 8, { speed: 4, up: 3, size: 0.12 });
+      if (l.wall && !l.wall.broken) damageWall(l.wall, l.dmg);
+      else if (!player.dead && dist2d(player.pos, l.to) < 1.3) hurtPlayer(l.hit);
+      // half the logs stay on the ground: free wood for repairs
+      if (Math.random() < 0.5) dropItem('log', l.to, 1.2);
     }
   }
 
-  function hurtPlayer(dmg) {
+  function updateClouds(dt) {
+    for (let i = clouds.length - 1; i >= 0; i--) {
+      const c = clouds[i];
+      c.t += dt;
+      if (!c.burst) {
+        // warning: swells and pulses before bursting
+        const k = c.t / POISON.cloudDelay;
+        c.mesh.scale.setScalar(0.5 + k * 1.2 + Math.sin(c.t * 30) * 0.08);
+        if (c.t >= POISON.cloudDelay) {
+          c.burst = true;
+          fx.burst(c.pos.clone().setY(0.8), 0x8fe05a, 26, { speed: 6, up: 3, size: 0.25, life: 0.8 });
+          fx.addShake(0.25);
+          if (!player.dead && dist2d(player.pos, c.pos) < POISON.cloudRadius) poisonPlayer(POISON.cloud);
+        }
+      } else {
+        const k = (c.t - POISON.cloudDelay) / 1;
+        c.mesh.scale.setScalar(POISON.cloudRadius * (0.7 + k * 0.3));
+        c.mesh.material.opacity = 0.35 * (1 - k);
+        if (k >= 1) { scene.remove(c.mesh); clouds.splice(i, 1); }
+      }
+    }
+  }
+
+  // Poison: short damage over time that ignores armor; the campfire cures it.
+  function poisonPlayer(seconds) {
     const P = player;
-    P.hp -= dmg;
+    if (P.dead) return;
+    if (P.poisonT <= 0) {
+      P.poisonTick = 0;
+      fx.text(P.pos.clone().setY(2.8), '☠ POISONED', 'hurt', { life: 1, rise: 50 });
+    }
+    P.poisonT = Math.max(P.poisonT, seconds); // refreshes, never stacks
+  }
+
+  const CAMPFIRE = new THREE.Vector3(0, 0, -0.8);
+  function updatePoisonAndCampfire(dt) {
+    const P = player;
+    if (P.dead) return;
+    const warm = dist2d(P.pos, CAMPFIRE) < POISON.campfireRadius;
+    if (P.poisonT > 0) {
+      if (warm) {
+        P.poisonT = 0;
+        fx.text(P.pos.clone().setY(2.6), 'CURED!', 'cash', { life: 1, rise: 50 });
+        fx.burst(P.pos.clone().setY(1), 0xffc36b, 10, { speed: 2, up: 3, size: 0.1 });
+        learn('campfire');
+      } else {
+        P.poisonT -= dt;
+        P.poisonTick += dt;
+        if (P.poisonTick >= 1) { P.poisonTick -= 1; hurtPlayer(POISON.dps, true); }
+      }
+    }
+    // warming up at the fire heals faster
+    if (warm && P.hp < PLAYER.maxHp) P.hp = Math.min(PLAYER.maxHp, P.hp + POISON.campfireHeal * dt);
+    hud.setPoison(P.poisonT > 0);
+  }
+
+  // Armor soaks up hits first (poison ticks pass `ignoreArmor`).
+  function hurtPlayer(dmg, ignoreArmor = false) {
+    const P = player;
     P.sinceHurt = 0;
-    fx.addShake(0.2);
+    if (!ignoreArmor && P.armor > 0) {
+      const soaked = Math.min(P.armor, dmg);
+      P.armor -= soaked;
+      dmg -= soaked;
+      fx.burst(P.pos.clone().setY(1.2), 0x9fd0ff, 5, { speed: 3, up: 3, size: 0.09 });
+      if (dmg <= 0) { fx.text(P.pos.clone().setY(2.2), `-${soaked} 🛡️`, 'warn', { life: 0.6, rise: 40 }); return; }
+    }
+    P.hp -= dmg;
+    fx.addShake(ignoreArmor ? 0.06 : 0.2);
     fx.text(P.pos.clone().setY(2.2), `-${dmg}`, 'hurt', { life: 0.6, rise: 40 });
-    fx.burst(P.pos.clone().setY(1), 0xe04848, 5, { speed: 3, up: 3, size: 0.09 });
+    fx.burst(P.pos.clone().setY(1), ignoreArmor ? 0x8fe05a : 0xe04848, 5, { speed: 3, up: 3, size: 0.09 });
     hud.flashHurt();
     if (P.hp <= 0) {
       P.hp = 0;
@@ -857,11 +1189,68 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     }
   }
 
+  // ---------- Ballista upgrade (heartwood from the log thrower + cash) ----------
+  // Once you've picked up your first heartwood, a gold square rings every arrow tower:
+  // stand next to the tower to pay, and it turns into a ballista.
+  function updateBallistaUpgrades(dt) {
+    const unlockedUp = built.has('firstHeartwood');
+    for (const t of towers) {
+      if (t.ballista || !unlockedUp) continue;
+      if (!t.up) {
+        const pad = Models.makePad(0xffc84a);
+        pad.scale.setScalar(1.55);
+        pad.position.set(t.x, 0, t.z);
+        scene.add(pad);
+        t.up = { pad, label: makeLabel(), cash: 0, wood: 0, payT: 0 };
+      }
+      const u = t.up;
+      const leftCash = BALLISTA.cash - u.cash, leftWood = BALLISTA.heartwood - u.wood;
+      u.label.innerHTML = `<div><span class="name">BALLISTA</span>🌟 ${leftWood} · 💵 ${leftCash}</div>`;
+      Models.setPadProgress(u.pad, (u.cash / BALLISTA.cash + u.wood / BALLISTA.heartwood) / 2);
+      const s = fx.toScreen(new THREE.Vector3(t.x, 0.2, t.z + 1.7));
+      u.label.style.left = s.x + 'px'; u.label.style.top = s.y + 'px';
+      u.payT -= dt;
+      if (player.dead || dist2d(player.pos, t) > 1.75 || u.payT > 0) continue;
+      u.payT = ECONOMY.payTick;
+      const target = new THREE.Vector3(t.x, 1.6, t.z);
+      const wood = leftWood > 0 && popStack(player.c, 'heartwood');
+      if (wood) {
+        u.wood++;
+        fx.fly(wood.mesh, wood.worldPos, () => target, { duration: 0.35, arc: 1.6 });
+      } else if (leftCash > 0 && cash > 0) {
+        const chunk = Math.min(cash, leftCash, Math.ceil(BALLISTA.cash / 20));
+        u.cash += chunk;
+        setCash(cash - chunk);
+        fx.fly(Models.makeCash(), player.pos.clone().setY(1.2), () => target, { duration: 0.28, arc: 1.4 });
+      }
+      if (u.wood >= BALLISTA.heartwood && u.cash >= BALLISTA.cash) toBallista(t);
+    }
+  }
+
+  function toBallista(t, silent = false) {
+    if (t.up) { scene.remove(t.up.pad); t.up.label.remove(); t.up = null; }
+    scene.remove(t.obj);
+    t.obj = Models.makeBallista();
+    t.obj.position.set(t.x, 0.12, t.z);
+    scene.add(t.obj);
+    Object.assign(t, { ballista: true, range: BALLISTA.range, fireRate: BALLISTA.fireRate, damage: BALLISTA.damage });
+    if (silent) return;
+    t.obj.scale.setScalar(0.01);
+    popIns.push({ obj: t.obj, t: 0 });
+    const at = new THREE.Vector3(t.x, 2, t.z);
+    fx.burst(at, 0xffc84a, 24, { speed: 5, up: 5, size: 0.18 });
+    fx.text(at.clone().setY(4), 'BALLISTA!', 'warn', { life: 1.4, rise: 80 });
+    fx.addShake(0.3);
+    events.push({ type: 'ballista', id: t.id, t: clock });
+    learn('ballista');
+    save();
+  }
+
   // ---------- Towers ----------
   function updateTowers(dt) {
     for (const t of towers) {
       t.fireT -= dt;
-      let target = null, best = TOWER.range;
+      let target = null, best = t.range;
       for (const b of bears) {
         if (b.dying) continue;
         const d = Math.hypot(b.pos.x - t.x, b.pos.z - t.z);
@@ -872,11 +1261,12 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
         const ang = Math.atan2(target.pos.x - t.x, target.pos.z - t.z);
         head.rotation.y = lerpAngle(head.rotation.y, ang, Math.min(1, dt * 12));
         if (t.fireT <= 0) {
-          t.fireT = TOWER.fireRate;
+          t.fireT = t.fireRate;
           const arrow = Models.makeArrow();
-          arrow.position.set(t.x, 2.7, t.z);
+          if (t.ballista) arrow.scale.setScalar(1.9); // heavy bolt
+          arrow.position.set(t.x, t.ballista ? 3 : 2.7, t.z);
           scene.add(arrow);
-          arrows.push({ obj: arrow, target, last: target.pos.clone() });
+          arrows.push({ obj: arrow, target, last: target.pos.clone(), dmg: t.damage, pierce: t.ballista, speed: t.ballista ? BALLISTA.boltSpeed : TOWER.arrowSpeed });
         }
       } else head.rotation.y += dt * 0.5;
     }
@@ -885,9 +1275,9 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       if (bears.includes(a.target) && !a.target.dying) a.last.copy(a.target.pos).setY(0.9 * a.target.def.scale);
       const dir = tmpA.subVectors(a.last, a.obj.position);
       const d = dir.length();
-      const step = TOWER.arrowSpeed * dt;
+      const step = a.speed * dt;
       if (d <= step + 0.2) {
-        if (bears.includes(a.target) && !a.target.dying) hurtBear(a.target, TOWER.damage, null);
+        if (bears.includes(a.target) && !a.target.dying) hurtBear(a.target, a.dmg, null, a.pierce);
         scene.remove(a.obj);
         arrows.splice(i, 1);
         continue;
@@ -925,11 +1315,22 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
 
   function startWave() {
     waves.n++;
-    const count = WAVES.countFor(waves.n);
-    for (let i = 0; i < count; i++) waves.queue.push(false);
-    const mega = waves.n % WAVES.megaEvery === 0;
-    if (mega) waves.queue.push(true);
-    hud.banner(mega ? 'MEGA BEAR INCOMING!' : `WAVE ${waves.n}: BEARS!`);
+    const n = waves.n;
+    const count = WAVES.countFor(n);
+    const hpMult = WAVES.hpScale(n);
+    for (let i = 0; i < count; i++) waves.queue.push({ kind: 'normal', hpMult });
+    // bosses arrive after the first regular bears
+    const bosses = WAVES.bossesFor(n);
+    bosses.forEach((kind, i) => waves.queue.splice(Math.min(waves.queue.length, 2 + i * 3), 0, { kind, hpMult: WAVES.bossScale(n) }));
+    if (bosses.length) {
+      const names = [...new Set(bosses)].map((k) => {
+        const c = bosses.filter((x) => x === k).length;
+        return BOSSES[k].name + (c > 1 ? ` ×${c}` : '');
+      });
+      hud.banner(`⚠ ${names.join(' + ')}!`);
+      fx.addShake(0.4);
+      events.push({ type: 'boss', kinds: bosses, n, t: clock });
+    } else hud.banner(`WAVE ${n}: BEARS!`);
     fx.addShake(0.2);
     events.push({ type: 'wave', n: waves.n, t: clock });
     waves.timer = waves.total = WAVES.interval;
@@ -979,6 +1380,9 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     // hurt: fall back under the towers until healed
     if (player.hp < PLAYER.maxHp * 0.45 && bearDist < 7) return new THREE.Vector3(0, 0, 2.5);
     if (bearDist < 5) return nearestBear.pos;
+    // the log thrower stays out of tower range: go get it
+    const thrower = bears.find((b) => b.kind === 'thrower' && !b.dying);
+    if (thrower && player.hp > PLAYER.maxHp * 0.6) return thrower.pos;
     const full = stackFree(c) <= 0;
     const logs = countOf(c, 'log');
     // The grill comes first: it unlocks the automation chain. Buildings and hires before upgrades.
@@ -986,11 +1390,24 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     const logZone = openLog.find((z) => z.def.kind === 'grill') || openLog[0];
     const byRemaining = (a, b) => (a.total - a.paid) - (b.total - b.paid);
     const cashZone = zones.filter((z) => z.state === 'open' && z.currency === 'cash' && cash > 0).sort(byRemaining)[0]
-      || upgrades.filter((z) => z.state === 'open' && cash > 0).sort(byRemaining)[0];
+      || upgrades.filter((z) => z.state === 'open' && z.currency === 'cash' && cash > 0).sort(byRemaining)[0];
     const drop = drops.filter((d) => !d.claim).sort((a, b) => a.pos.distanceTo(p) - b.pos.distanceTo(p))[0];
     if (counter.pileValue > 0) return new THREE.Vector3(counter.pos.x + 1.5, 0, counter.pos.z + 0.3);
-    if (countOf(c, 'steak') && counter.built) return spots.counter();
-    if (countOf(c, 'meat') && (full || !drop)) return grill.built ? spots.grillIn() : counter.built ? spots.counter() : null;
+    if ((countOf(c, 'steak') || countOf(c, 'spicy')) && counter.built) return spots.counter();
+    // (before the sell table exists there's nowhere to take meat: keep chopping instead of freezing)
+    if (rawCount(c) && (full || !drop) && (grill.built || counter.built)) return grill.built ? spots.grillIn() : spots.counter();
+    // boss extras: forge armor with plates, patch damaged walls with wood
+    const armorPad = upgrades.find((u) => u.def.id === 'armor' && u.state === 'open');
+    if (armorPad && countOf(c, 'plate')) return new THREE.Vector3(armorPad.def.x, 0, armorPad.def.z);
+    const plainTower = towers.find((t) => !t.ballista);
+    if (plainTower && countOf(c, 'heartwood') && cash >= 50) {
+      // stand on the camp side of the tower
+      const dx = -plainTower.x, dz = -plainTower.z, l = Math.hypot(dx, dz) || 1;
+      return new THREE.Vector3(plainTower.x + (dx / l) * 1.3, 0, plainTower.z + (dz / l) * 1.3);
+    }
+    const hurtWall = walls.find((w) => w.pad);
+    if (hurtWall && countOf(c, 'log') >= 3) return new THREE.Vector3(hurtWall.def.x, 0, hurtWall.def.z);
+    if (player.poisonT > 0) return CAMPFIRE.clone();
     if (logs && logZone && (full || logs >= logZone.total - logZone.paid || (woodpile.count === 0 && logs >= 10))) return new THREE.Vector3(logZone.def.x, 0, logZone.def.z);
     if (cashZone && cash >= Math.min(20, cashZone.total - cashZone.paid)) return new THREE.Vector3(cashZone.def.x, 0, cashZone.def.z);
     if (grill.out > 0 && !full && !helpers.some((h) => h.kind === 'cashier')) return spots.grillOut();
@@ -1009,6 +1426,8 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     try {
       localStorage.setItem(SAVE_KEY, JSON.stringify({
         v: 1, cash, built: [...built], levels, wave: waves.n, woodpile: woodpile.count,
+        walls: Object.fromEntries(walls.map((w) => [w.side, Math.round(w.hp)])),
+        ballistas: towers.filter((t) => t.ballista).map((t) => t.id),
         paid: Object.fromEntries([...zones, ...upgrades].filter((z) => z.state === 'open' && z.paid > 0).map((z) => [z.def.id, z.paid])),
       }));
     } catch { /* storage unavailable: play without saving */ }
@@ -1020,6 +1439,14 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     try { s = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null'); } catch { s = null; }
     if (!s || s.v !== 1) return false;
     for (const z of zones) if (s.built?.includes(z.def.id)) construct(z, true);
+    // milestone flags that aren't buildings (e.g. 'firstPlate' unlocks the ARMOR square)
+    for (const id of s.built || []) built.add(id);
+    refreshUnlocks();
+    for (const t of towers) if (s.ballistas?.includes(t.id)) toBallista(t, true);
+    for (const w of walls) {
+      const hp = s.walls?.[w.side];
+      if (hp !== undefined && hp < WALL.hp) { w.hp = WALL.hp; if (hp <= 0) damageWall(w, WALL.hp); else { w.hp = hp; wallLook(w); } }
+    }
     for (const u of upgrades) {
       const lv = s.levels?.[u.def.id] || 0;
       levels[u.def.id] = lv;
@@ -1033,6 +1460,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     if (s.woodpile && woodpile.built) addWood(s.woodpile);
     waves.n = s.wave || 0;
     setCash(s.cash || 0);
+    player.armor = armorMax();
     layoutStack(player.c);
     return true;
   }
@@ -1075,9 +1503,33 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
   function computeGoal() {
     const P = player, c = P.c;
     if (P.dead) return null;
-    const logs = countOf(c, 'log'), meat = countOf(c, 'meat'), steaks = countOf(c, 'steak');
+    const logs = countOf(c, 'log'), meat = countOf(c, 'meat'), steaks = countOf(c, 'steak') + countOf(c, 'spicy');
     const tips = [];
     const bear = bears.filter((b) => !b.dying).sort((a, b) => dist2d(a.pos, P.pos) - dist2d(b.pos, P.pos))[0];
+
+    // --- boss moments first: each one explained the first time it happens ---
+    if (P.poisonT > 0) tips.push({ key: 'campfire', icon: '☠️', text: 'Poisoned! Stand by the campfire to cure it (it heals you too)', pos: CAMPFIRE.clone() });
+    if (clouds.some((cl) => !cl.burst)) tips.push({ key: 'cloud', info: 3, icon: '💨', text: 'The poison bear is about to burst: step back!' });
+    const alive = (kind) => bears.find((b) => b.kind === kind && !b.dying);
+    const armored = alive('armored');
+    if (armored && armored.armor > 0) tips.push({ key: 'bossArmored', info: 8, icon: '🛡️', text: 'ARMORED BEAR: arrows bounce off. Break its plates with your axe!', pos: armored.pos.clone() });
+    const thrower = alive('thrower');
+    if (thrower) tips.push({ key: 'bossThrower', info: 8, icon: '🪵', text: 'LOG THROWER: it smashes your walls from afar. Go out and hit it!', pos: thrower.pos.clone() });
+    const poisoner = alive('poison');
+    if (poisoner) tips.push({ key: 'bossPoison', info: 8, icon: '🤢', text: 'POISON BEAR: its bite poisons you, and it bursts when it dies', pos: poisoner.pos.clone() });
+    const loot = drops.find((d) => d.type === 'loot');
+    if (loot) tips.push({ key: 'loot', icon: '💰', text: 'Boss loot! Walk over the bag to grab the cash', pos: loot.pos.clone() });
+    const armorPad = upgrades.find((u) => u.def.id === 'armor' && u.state === 'open');
+    if (armorPad && countOf(c, 'plate')) tips.push({ key: 'forge', icon: '🛡️', text: 'Bring armor plates to the ARMOR square: armor soaks up hits', pos: padPos(armorPad) });
+    if (countOf(c, 'toxic')) {
+      if (grill.built) tips.push({ key: 'toxic', icon: '🤢', text: 'Toxic meat is worth $0 raw. Grill it into a $30 spicy steak!', pos: grill.pos.clone() });
+      else tips.push({ key: 'toxicNoGrill', info: 8, icon: '🤢', text: 'Toxic meat is worth $0 raw. Build the GRILL to cook it for $30' });
+    }
+    const plainTower = towers.find((t) => !t.ballista);
+    if (countOf(c, 'heartwood') && plainTower) tips.push({ key: 'ballista', icon: '🌟', text: 'Heartwood! Stand by an arrow tower to turn it into a BALLISTA (12 m reach)', pos: new THREE.Vector3(plainTower.x, 0, plainTower.z) });
+    const hurtWall = walls.find((w) => w.pad);
+    if (hurtWall) tips.push({ key: 'repair', icon: '🔨', text: `${hurtWall.name} is ${hurtWall.broken ? 'broken' : 'damaged'}! Bring wood to its REPAIR square`, pos: padPos({ def: hurtWall.def }) });
+
     if (bear && dist2d(bear.pos, P.pos) < 6) tips.push({ key: 'fight', icon: '🐻', text: 'Bears! Stay close to hit them. Low HP? Run back under your towers.' });
 
     // (once chopping is learned, the generic "Bring wood to the SELL TABLE square" tip below takes over)
@@ -1174,10 +1626,13 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       auto.used = true;
       const goal = autopilotGoal();
       if (goal) {
+        // stop only when the final goal is reached, never at an intermediate waypoint
+        // (a doorway point 0.3 m away used to freeze the autopilot outside the camp)
         const step = routeTarget(P.pos, goal);
-        const dx = step.x - P.pos.x, dz = step.z - P.pos.z;
-        const l = Math.hypot(dx, dz);
-        if (l > 0.45) [mx, mz] = steer(P, dx / l, dz / l); else { mx = mz = 0; }
+        let dx = step.x - P.pos.x, dz = step.z - P.pos.z;
+        let l = Math.hypot(dx, dz);
+        if (l < 0.05) { dx = goal.x - P.pos.x; dz = goal.z - P.pos.z; l = Math.hypot(dx, dz); }
+        if (dist2d(P.pos, goal) > 0.45 && l > 0.001) [mx, mz] = steer(P, dx / l, dz / l); else { mx = mz = 0; }
       } else { mx = mz = 0; }
     }
     if (P.dead) {
@@ -1255,7 +1710,10 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     // hp regen
     P.sinceHurt += dt;
     if (!P.dead && P.sinceHurt > PLAYER.regenDelay && P.hp < PLAYER.maxHp) P.hp = Math.min(PLAYER.maxHp, P.hp + PLAYER.regenRate * dt);
+    if (!P.dead && P.sinceHurt > PLAYER.regenDelay && P.armor < armorMax()) P.armor = Math.min(armorMax(), P.armor + ARMOR.regen * dt);
+    updatePoisonAndCampfire(dt);
     hud.setHp(P.hp / PLAYER.maxHp);
+    hud.setArmor(armorMax() ? P.armor / armorMax() : 0, armorMax() > 0);
 
     // --- trees regrow / shake ---
     for (const t of trees) {
@@ -1276,10 +1734,32 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       d.t += dt;
       d.mesh.position.y = d.pos.y + Math.sin(d.t * 4) * 0.08;
       d.mesh.rotation.y += dt;
-      if (!P.dead && stackFree(P.c) > 0 && d.pos.distanceTo(P.pos) < PLAYER.pickupRange) {
+      if (P.dead || d.pos.distanceTo(P.pos) >= PLAYER.pickupRange) continue;
+      if (d.type === 'loot') {
+        // boss loot bag: straight to your wallet, no bag space needed
         scene.remove(d.mesh);
         drops.splice(i, 1);
-        collectToBack(P.c, d.type, d.mesh.position.clone(), d.mesh);
+        const value = d.value;
+        fx.fly(d.mesh, d.mesh.position.clone(), () => P.pos.clone().setY(1.3), {
+          duration: 0.3, arc: 1,
+          onDone: () => { setCash(cash + value); hud.bumpCash(); learn('loot'); fx.text(P.pos.clone().setY(2.6), `+$${value}`, 'cash', { life: 1, rise: 60 }); },
+        });
+        continue;
+      }
+      if (stackFree(P.c) <= 0) continue;
+      scene.remove(d.mesh);
+      drops.splice(i, 1);
+      collectToBack(P.c, d.type, d.mesh.position.clone(), d.mesh);
+      if (d.type === 'plate' && !built.has('firstPlate')) {
+        // first armor plate ever: the ARMOR forge square appears
+        built.add('firstPlate');
+        refreshUnlocks();
+        save();
+      }
+      if (d.type === 'heartwood' && !built.has('firstHeartwood')) {
+        // first heartwood ever: arrow towers can now become ballistas
+        built.add('firstHeartwood');
+        save();
       }
     }
 
@@ -1314,10 +1794,11 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     if (grill.built) {
       updateGrill(dt);
       if (!P.dead && dist2d(P.pos, grill.pos) < 2.0) {
-        if (countOf(P.c, 'meat')) feedGrill(P.c);
+        if (rawCount(P.c)) feedGrill(P.c);
         else takeFromGrill(P.c);
       }
     }
+    updateWalls(dt);
     if (woodpile.built && !P.dead && dist2d(P.pos, woodpile.pos) < 1.6 && P.c.actT <= 0) {
       P.c.actT = 0.06;
       takeWood(P.c);
@@ -1327,6 +1808,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     for (const h of helpers) updateHelper(h, dt);
     updateBears(dt);
     updateTowers(dt);
+    updateBallistaUpgrades(dt);
 
     // --- waves ---
     if (!P.dead) {
@@ -1334,11 +1816,19 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       if (waves.timer <= 0) startWave();
       if (waves.queue.length) {
         waves.gap -= dt;
-        if (waves.gap <= 0) { spawnBear(waves.queue.shift()); waves.gap = WAVES.spawnGap; }
+        if (waves.gap <= 0) { const q = waves.queue.shift(); spawnBear(q.kind, q.hpMult); waves.gap = WAVES.spawnGap; }
       }
     }
     const aliveBears = bears.filter((b) => !b.dying).length;
     hud.setWave(aliveBears > 0 ? `WAVE ${waves.n} · ${aliveBears} 🐻` : `WAVE ${waves.n + 1} IN ${Math.ceil(waves.timer)}s`, 1 - waves.timer / waves.total);
+    // boss bar: all bosses alive, armor counted as extra health
+    const bossesAlive = bears.filter((b) => b.boss && !b.dying);
+    if (bossesAlive.length) {
+      const names = [...new Set(bossesAlive.map((b) => b.def.name))];
+      const cur = bossesAlive.reduce((s, b) => s + b.hp + b.armor, 0);
+      const max = bossesAlive.reduce((s, b) => s + b.maxHp + b.maxArmor, 0);
+      hud.setBoss(names.join(' + ') + (bossesAlive.length > names.length ? ` ×${bossesAlive.length}` : ''), cur / max);
+    } else hud.setBoss(null);
 
     // campfire flicker
     const fl = campfire.userData.flames;
@@ -1366,12 +1856,19 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     const P = player;
     P.dead = false;
     P.hp = PLAYER.maxHp;
+    P.armor = armorMax();
+    P.poisonT = 0;
+    hud.setPoison(false);
+    for (const c of clouds) scene.remove(c.mesh);
+    clouds.length = 0;
+    for (const l of thrown) scene.remove(l.mesh);
+    thrown.length = 0;
     P.pos.copy(SPAWN);
     P.obj.rotation.z = 0;
     for (const it of P.c.stack) P.obj.userData.back.remove(it.mesh);
     P.c.stack.length = 0;
     layoutStack(P.c);
-    for (const b of bears) scene.remove(b.obj, b.bar);
+    for (const b of bears) { scene.remove(b.obj, b.bar); if (b.armorBar) scene.remove(b.armorBar); }
     bears.length = 0;
     waves.queue.length = 0;
     waves.timer = waves.total = 20;
@@ -1393,6 +1890,9 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     // dev/test helpers
     give(type, n = 1) { for (let i = 0; i < n && stackFree(player.c) > 0; i++) pushStack(player.c, type, makeItem(type)); },
     count: (type) => countOf(player.c, type),
-    counter, logsNeeded,
+    counter, logsNeeded, spawnBear, bears, walls, drops, levels, learned,
+    armorMax, towers,
+    autoGoal: () => autopilotGoal(),
+    flag(id) { built.add(id); refreshUnlocks(); }, // e.g. 'firstHeartwood', 'firstPlate' (tests/footage)
   };
 }

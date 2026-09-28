@@ -51,6 +51,14 @@ const hud = {
   banner(text) { const b = $('banner'); b.textContent = text; b.classList.remove('show'); void b.offsetWidth; b.classList.add('show'); },
   defeat(show) { $('defeat').classList.toggle('hidden', !show); input.setEnabled(!show); },
   flashHurt() { stage.animate([{ boxShadow: 'inset 0 0 80px rgba(255,40,40,.6)' }, { boxShadow: 'inset 0 0 0 rgba(255,40,40,0)' }], 300); },
+  setArmor(f, show) { $('armor-bar').classList.toggle('hidden', !show); $('armor-fill').style.width = `${f * 100}%`; },
+  setPoison(on) { $('poison').classList.toggle('hidden', !on); },
+  setBoss(name, frac) {
+    $('boss').classList.toggle('hidden', !name);
+    if (!name) return;
+    $('boss-name').textContent = name;
+    $('boss-fill').style.width = `${Math.max(0, Math.min(1, frac)) * 100}%`;
+  },
   // bottom tip telling the player what to do next; pulses when the goal changes
   setHint(text, icon) {
     const h = $('hint');
