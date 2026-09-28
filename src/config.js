@@ -14,9 +14,9 @@ export const PLAYER = {
   pickupRange: 2.2,
   baseBag: 12,
   bagPerLevel: 4,
-  // Upgrades are endless and keep pace with the bears (+8% hp per wave): the axe gains
-  // +12% per level, a bit more, so investing gets you slightly ahead without breaking the game.
-  damage: (axeLevel) => 1 + 0.12 * axeLevel,
+  // Endless axe upgrades: a real +12% on top of the previous level each time (compounding):
+  // ×1.12, ×1.25, ×1.40, ×1.57… roughly doubling every 6 levels.
+  damage: (axeLevel) => Math.pow(1.12, axeLevel),
   // logs per axe hit on a tree: 1, then 2 from AXE LV5 (level 4), 3 from LV9 = one-shot trees
   chopPower: (axeLevel) => Math.min(3, 1 + Math.floor(axeLevel / 4)),
   // selling gets faster with the bag level: +15% speed per level, then 2-3 items per tick

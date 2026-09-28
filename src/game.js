@@ -37,7 +37,7 @@ const dist2d = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
 
 const NO_SFX = { play() {}, setListener() {} };
 
-export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = true, sfx = NO_SFX }) {
+export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = true, sfx = NO_SFX, saveKey = SAVE_KEY }) {
   // ---------- World ----------
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), Models.M.snow);
   ground.rotation.x = -Math.PI / 2;
@@ -224,7 +224,10 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     const icon = CURRENCY_ICON[z.currency];
     const left = Math.max(0, z.total - z.paid);
     const title = z.def.icon ? `${z.def.icon} ${z.def.name} LV${z.level + 1}` : z.def.name;
-    z.label.innerHTML = `<div><span class="name">${title}</span>${icon} ${left}</div>`;
+    // the axe square shows what you're buying: damage now → after this level
+    const fmt = (v) => (v < 10 ? v.toFixed(1) : Math.round(v));
+    const extra = z.def.id === 'axe' ? `<span class="name">dmg ${fmt(PLAYER.damage(z.level))} → ${fmt(PLAYER.damage(z.level + 1))}</span>` : '';
+    z.label.innerHTML = `<div><span class="name">${title}</span>${extra}${icon} ${left}</div>`;
   }
 
   const unlocked = (req) => !req || req.every((id) => built.has(id));
@@ -1382,6 +1385,8 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
   //  - BALLISTA (arrow tower → ballista): heartwood + logs + cash, once you've found heartwood
   //  - POISON BOLTS (ballista → poison ballista): poison vial + logs + cash, once you've found a vial
   const ITEM_ICON = { heartwood: '🌟', vial: '🧪', logs: '🪵', cash: '💵' };
+  const SPECIALS = ['heartwood', 'vial', 'plate']; // rare boss items, saved wherever they are
+  const pendingUps = {}; // tower upgrade payments restored from the save
   const upgradeFor = (t) => {
     if (!t.ballista && built.has('firstHeartwood')) return { kind: 'ballista', name: 'BALLISTA', cost: BALLISTA.cost };
     if (t.ballista && !t.poison && built.has('firstVial')) return { kind: 'poison', name: 'POISON BOLTS', cost: BALLISTA.poisonCost };
@@ -1403,7 +1408,10 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
         pad.scale.setScalar(1.55);
         pad.position.set(t.x, 0, t.z);
         scene.add(pad);
-        t.up = { kind: want.kind, pad, label: makeLabel(), paid: {}, payT: 0 };
+        // restore what was already paid into this square before the game was closed
+        const saved = pendingUps[t.id]?.kind === want.kind ? pendingUps[t.id].paid : {};
+        delete pendingUps[t.id];
+        t.up = { kind: want.kind, pad, label: makeLabel(), paid: { ...saved }, payT: 0 };
       }
       const u = t.up, cost = want.cost;
       const left = (k) => cost[k] - (u.paid[k] || 0);
@@ -1504,10 +1512,13 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     fx.text(at.clone().setY(3.5), 'BALLISTA DESTROYED!', 'hurt', { life: 1.6, rise: 80 });
     fx.addShake(0.4);
     sfx.play('crash', { at });
-    // hand the special parts back, on the camp side of the tower
-    const inward = new THREE.Vector3(-t.x, 0, -t.z).normalize().multiplyScalar(1.6).add(at);
-    dropItem('heartwood', inward, 0.8);
-    if (wasPoison) dropItem('vial', inward, 0.8);
+    // Hand the special parts back on the inner side of the tower, far enough (2.8 m) that
+    // picking them up doesn't instantly pay them back into the tower's upgrade square.
+    const cz = t.z > H ? (H + ANNEX_END) / 2 : 0;
+    const inward = new THREE.Vector3(-t.x, 0, cz - t.z).normalize().multiplyScalar(2.8).add(at);
+    dropItem('heartwood', inward, 0.4);
+    if (wasPoison) dropItem('vial', inward, 0.4);
+    fx.text(inward.clone().setY(2.2), wasPoison ? 'HEARTWOOD + VIAL DROPPED' : 'HEARTWOOD DROPPED', 'warn', { life: 2, rise: 60 });
     events.push({ type: 'ballistaDestroyed', id: t.id, t: clock });
     save();
   }
@@ -1718,11 +1729,15 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
   function save() {
     if (!useSave || auto.used) return; // autopilot runs are for footage; never overwrite the player's save
     try {
-      localStorage.setItem(SAVE_KEY, JSON.stringify({
+      localStorage.setItem(saveKey, JSON.stringify({
         v: 1, cash, built: [...built], levels, wave: waves.n, woodpile: woodpile.count,
         walls: Object.fromEntries(walls.map((w) => [w.side, Math.round(w.hp)])),
         ballistas: towers.filter((t) => t.ballista).map((t) => t.id),
         poisonBallistas: towers.filter((t) => t.poison).map((t) => t.id),
+        // rare boss items must never vanish: the ones in your bag or still on the ground...
+        specials: Object.fromEntries(SPECIALS.map((k) => [k, countOf(player.c, k) + drops.filter((d) => d.type === k).length])),
+        // ...and what you already put into a tower's BALLISTA / POISON BOLTS square
+        towerUps: towers.filter((t) => t.up && Object.keys(t.up.paid).length).map((t) => ({ id: t.id, kind: t.up.kind, paid: t.up.paid })),
         paid: Object.fromEntries([...zones, ...upgrades].filter((z) => z.state === 'open' && z.paid > 0).map((z) => [z.def.id, z.paid])),
       }));
     } catch { /* storage unavailable: play without saving */ }
@@ -1731,7 +1746,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
   function load() {
     if (!useSave) return false;
     let s = null;
-    try { s = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null'); } catch { s = null; }
+    try { s = JSON.parse(localStorage.getItem(saveKey) || 'null'); } catch { s = null; }
     if (!s || s.v !== 1) return false;
     for (const z of zones) if (s.built?.includes(z.def.id)) construct(z, true);
     // milestone flags that aren't buildings (e.g. 'firstPlate' unlocks the ARMOR square)
@@ -1739,6 +1754,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     refreshUnlocks();
     for (const t of towers) if (s.ballistas?.includes(t.id)) toBallista(t, true);
     for (const t of towers) if (t.ballista && s.poisonBallistas?.includes(t.id)) toPoisonBallista(t, true);
+    for (const u of s.towerUps || []) pendingUps[u.id] = u;
     for (const w of walls) {
       const hp = s.walls?.[w.side];
       if (hp !== undefined && hp < WALL.hp) { w.hp = WALL.hp; if (hp <= 0) damageWall(w, WALL.hp); else { w.hp = hp; wallLook(w); } }
@@ -1757,12 +1773,19 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     waves.n = s.wave || 0;
     setCash(s.cash || 0);
     player.armor = armorMax();
+    // give the rare items back (in the bag, or on the ground next to you if it's full)
+    for (const k of SPECIALS) {
+      for (let i = 0; i < (s.specials?.[k] || 0); i++) {
+        if (stackFree(player.c) > 0) pushStack(player.c, k, makeItem(k));
+        else dropItem(k, SPAWN, 1.5);
+      }
+    }
     layoutStack(player.c);
     return true;
   }
 
   function resetSave() {
-    try { localStorage.removeItem(SAVE_KEY); } catch { /* ignore */ }
+    try { localStorage.removeItem(saveKey); } catch { /* ignore */ }
   }
 
   // ---------- Guidance: what to do next, where it is, what each station does ----------
@@ -2199,7 +2222,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     give(type, n = 1) { for (let i = 0; i < n && stackFree(player.c) > 0; i++) pushStack(player.c, type, makeItem(type)); },
     count: (type) => countOf(player.c, type),
     counter, logsNeeded, spawnBear, bears, walls, drops, levels, learned,
-    armorMax, towers,
+    armorMax, towers, damageTower, save,
     autoGoal: () => autopilotGoal(),
     flag(id) { built.add(id); refreshUnlocks(); }, // e.g. 'firstHeartwood', 'firstPlate' (tests/footage)
   };

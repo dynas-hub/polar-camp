@@ -10,7 +10,9 @@ import { createAudio } from './audio.js';
 const params = new URLSearchParams(location.search);
 if (params.has('shorts')) document.body.classList.add('shorts');
 // ?reset=1 starts a fresh game (wipes the local save)
-if (params.has('reset')) { try { localStorage.removeItem('polarcamp-save-v1'); } catch { /* ignore */ } }
+// ?slot=test uses a separate save (for testing without touching the real one)
+const SAVE_KEY = 'polarcamp-save-v1' + (params.get('slot') ? '-' + params.get('slot') : '');
+if (params.has('reset')) { try { localStorage.removeItem(SAVE_KEY); } catch { /* ignore */ } }
 
 const stage = document.getElementById('stage');
 const canvas = document.getElementById('game');
@@ -86,7 +88,7 @@ showSound();
 soundBtn.addEventListener('click', () => { sfx.setMuted(!sfx.muted); showSound(); sfx.play('click'); });
 
 // Autopilot sessions (footage/tests) never read or write the player's save.
-const game = createGame({ scene, camera, fx, input, hud, labelsEl, useSave: !params.has('auto'), sfx });
+const game = createGame({ scene, camera, fx, input, hud, labelsEl, useSave: !params.has('auto'), sfx, saveKey: SAVE_KEY });
 const recorder = createRecorder(stage, canvas, () => renderer.render(scene, camera));
 
 $('retry').addEventListener('click', () => game.retry());
