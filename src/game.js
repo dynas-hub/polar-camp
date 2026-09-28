@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import {
   CAMP_HALF, PLAYER, TREE, BEAR, BOSSES, POISON, WALL, ARMOR, WAVES, TOWER, BALLISTA, ECONOMY, ZONES, UPGRADES, HELPERS, WOODPILE,
+  WALLS, ANNEX_END, WORKERS, SMOKER,
 } from './config.js';
 import * as Models from './models.js';
 
@@ -52,6 +53,8 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
   const campfire = Models.makeCampfire();
   campfire.position.set(0, 0.12, -0.8);
   scene.add(campfire); // decoration: you can walk right over it
+  // own flame materials so they can fade while the fire recharges (the grill shares the originals)
+  campfire.userData.flames.forEach((f) => { f.material = f.material.clone(); f.material.transparent = true; });
 
   const tent = Models.makeTent();
   tent.position.set(-2.4, 0.12, 0.9);
@@ -65,10 +68,11 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     const a = rand() * Math.PI * 2;
     const d = TREE.minDist + Math.sqrt(rand()) * (TREE.maxDist - TREE.minDist);
     const x = Math.cos(a) * d, z = Math.sin(a) * d;
-    if (Math.abs(x) < CAMP_HALF + 2.5 && Math.abs(z) < CAMP_HALF + 2.5) continue;
+    // no trees on the camp or on the land kept for the expansion (south of the camp)
+    if (Math.abs(x) < CAMP_HALF + 2.5 && z > -CAMP_HALF - 2.5 && z < ANNEX_END + 2.5) continue;
     // keep the camp's outer corners clear: workers walk around the walls through them
     const C = CAMP_HALF + 1.3;
-    if (Math.abs(Math.abs(x) - C) < 2.5 && Math.abs(Math.abs(z) - C) < 2.5) continue;
+    if (Math.abs(Math.abs(x) - C) < 2.5 && (Math.abs(Math.abs(z) - C) < 2.5 || Math.abs(z - (ANNEX_END + 1.3)) < 2.5)) continue;
     if (trees.some((t) => Math.hypot(t.x - x, t.z - z) < TREE.spacing)) continue;
     const obj = Models.makeTree();
     const s = 0.85 + rand() * 0.35;
@@ -84,6 +88,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
   for (let i = 0; i < 26; i++) {
     const a = rand() * Math.PI * 2, d = 10 + rand() * 30;
     const x = Math.cos(a) * d, z = Math.sin(a) * d;
+    if (Math.abs(x) < CAMP_HALF + 1.5 && z > -CAMP_HALF - 1.5 && z < ANNEX_END + 1.5) continue;
     if (trees.some((t) => Math.hypot(t.x - x, t.z - z) < 1.6)) continue;
     const rock = Models.makeRock(0.7 + rand() * 0.9);
     rock.position.set(x, 0, z);
@@ -97,11 +102,12 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
   // ---------- Carriers: anything with a stack on its back (player + workers) ----------
   const ITEM_MODELS = {
     log: Models.makeLog, steak: Models.makeSteak, meat: Models.makeMeat, heartwood: Models.makeHeartwood,
+    vial: Models.makeVial, smoked: Models.makeSpicySteak,
     toxic: Models.makeToxicMeat, spicy: Models.makeSpicySteak, plate: Models.makePlate, loot: Models.makeLootBag,
   };
   const makeItem = (type) => (ITEM_MODELS[type] || Models.makeMeat)();
   const RAW = ['meat', 'toxic'];         // what the hunter carries and the grill accepts
-  const PRICE = { spicy: ECONOMY.spicyPrice, steak: ECONOMY.steakPrice, meat: ECONOMY.meatPrice, toxic: ECONOMY.toxicPrice, log: ECONOMY.logPrice };
+  const PRICE = { spicy: ECONOMY.spicyPrice, smoked: SMOKER.price, steak: ECONOMY.steakPrice, meat: ECONOMY.meatPrice, toxic: ECONOMY.toxicPrice, log: ECONOMY.logPrice };
 
   function makeCarrier(obj, capFn, isPlayer = false) {
     return { obj, stack: [], incoming: 0, cap: capFn, isPlayer, sellT: 0, actT: 0 };
@@ -181,7 +187,8 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
   };
   player.c = makeCarrier(player.obj, () => PLAYER.baseBag + levels.bag * PLAYER.bagPerLevel, true);
   scene.add(player.obj);
-  const damage = () => PLAYER.baseDamage + levels.axe * PLAYER.damagePerLevel;
+  // damage shown as a whole number when it's big, with one decimal while it's small
+  const damage = () => Math.round(PLAYER.damage(levels.axe) * 10) / 10;
 
   // ---------- Build zones & upgrades ----------
   const built = new Set();
@@ -229,7 +236,12 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
 
   const counter = { built: false, obj: null, pos: V(), pile: [], pileValue: 0, collectT: 0 };
   // queue/out are counts; queueTypes/outTypes say what's cooking (meat → steak, toxic → spicy)
-  const grill = { built: false, obj: null, pos: V(), queue: 0, queueTypes: [], cookT: 0, out: 0, outTypes: [], visuals: [], smokeT: 0 };
+  const grill = { built: false, obj: null, pos: V(), queue: 0, queueTypes: [], cookT: 0, out: 0, outTypes: [], visuals: [], smokeT: 0, cookTime: ECONOMY.cookTime };
+  // the smokehouse (camp expansion) works like the grill: faster, and everything comes out 'smoked'
+  const smoker = { built: false, obj: null, pos: V(), queue: 0, queueTypes: [], cookT: 0, out: 0, outTypes: [], visuals: [], smokeT: 0, cookTime: SMOKER.cookTime, smoker: true };
+  const cookers = [grill, smoker];
+  const builtCookers = () => cookers.filter((k) => k.built);
+  const nearestCooker = (p, filter = () => true) => builtCookers().filter(filter).sort((a, b) => dist2d(a.pos, p) - dist2d(b.pos, p))[0] || null;
   const woodpile = { built: false, obj: null, pos: new THREE.Vector3(WOODPILE.x, 0, WOODPILE.z), count: 0, visuals: [] };
   const towers = [];
   const arrows = [];
@@ -252,9 +264,15 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       obj = Models.makeTower();
       obj.position.set(d.x, 0.12, d.z);
       addBox(d.x, d.z, 0.62, 0.62);
-      towers.push({ obj, id: d.id, x: d.x, z: d.z, fireT: 0.5, ballista: false, range: TOWER.range, fireRate: TOWER.fireRate, damage: TOWER.damage, up: null });
+      const tower = {
+        obj, id: d.id, x: d.x, z: d.z, fireT: 0.5, ballista: false, poison: false,
+        range: TOWER.range, fireRate: TOWER.fireRate, damage: TOWER.damage, up: null,
+        hp: 0, box: colliders[colliders.length - 1], bar: null,
+      };
+      tower.box.tower = tower; // bears pushing against it can find the (ballista) to chew
+      towers.push(tower);
     } else if (d.kind === 'wall') {
-      const w = Models.makeWall(d.wall);
+      const w = Models.makeWall(WALLS[d.wall]);
       obj = w.group;
       colliders.push(...w.colliders);
       wallColliders.push(...w.colliders);
@@ -270,7 +288,17 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     } else if (d.kind === 'hire') {
       if (d.helper === 'lumberjack' && !woodpile.built) buildWoodpile(silent);
       spawnHelper(d.helper, new THREE.Vector3(d.x, 0, d.z), silent);
+    } else if (d.kind === 'expand') {
+      // the annex: a new floor behind the south wall (its walls and buildings are separate squares)
+      obj = Models.makeCampFloor(CAMP_HALF * 2, ANNEX_END - CAMP_HALF);
+      obj.position.set(0, 0, (CAMP_HALF + ANNEX_END) / 2);
+    } else if (d.kind === 'smoker') {
+      obj = Models.makeSmokehouse();
+      obj.position.set(d.x, 0.12, d.z);
+      addBox(d.x, d.z, 0.8, 0.7);
+      Object.assign(smoker, { built: true, obj, pos: new THREE.Vector3(d.x, 0, d.z) });
     }
+    // ('milestone' squares like the expansion foundations just record progress)
     if (obj) {
       scene.add(obj);
       if (!silent) { obj.scale.setScalar(0.01); popIns.push({ obj, t: 0 }); }
@@ -384,9 +412,10 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     if (!silent) { woodpile.obj.scale.setScalar(0.01); popIns.push({ obj: woodpile.obj, t: 0 }); }
   }
 
+  // middle point of a wall line (for effects, sounds and labels)
   function pointForWall(side) {
-    if (side === 'N') return new THREE.Vector3(0, 1, -CAMP_HALF);
-    return new THREE.Vector3(side === 'W' ? -CAMP_HALF : CAMP_HALF, 1, 0);
+    const l = WALLS[side], mid = (l.from + l.to) / 2;
+    return l.axis === 'x' ? new THREE.Vector3(mid, 1, l.at) : new THREE.Vector3(l.at, 1, mid);
   }
 
   function onPad(z) {
@@ -453,28 +482,73 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     save();
   }
 
-  // ---------- Paths: get around walls through the openings ----------
-  // Returns the point to walk toward right now to eventually reach `to`.
-  // The wall band itself counts as inside, so walkers in a doorway finish crossing
-  // instead of flip-flopping (walls' outer face + body radius sits beyond +0.5).
-  const isInside = (p) => Math.abs(p.x) < CAMP_HALF + 0.5 && Math.abs(p.z) < CAMP_HALF + 0.5;
-  const clampIn = (v) => THREE.MathUtils.clamp(v, -CAMP_HALF + 1.3, CAMP_HALF - 1.3);
+  // ---------- Paths: get around walls through the gates / open sides ----------
+  // Three regions: the camp ('main'), the expansion ('annex', once built) and the outside.
+  // They connect through portals: a gate in a standing wall, or anywhere along a side whose
+  // wall isn't built (or is broken). routeTarget returns the point to walk toward right now.
+  // The wall bands count as inside, so walkers in a doorway finish crossing instead of
+  // flip-flopping (a wall's outer face + body radius sits beyond +0.5).
+  const H = CAMP_HALF;
+  const expanded = () => built.has('expand');
+  const standing = (side) => walls.some((w) => w.side === side && !w.broken);
+  function region(p) {
+    if (Math.abs(p.x) >= H + 0.5 || p.z <= -H - 0.5) return 'out';
+    if (p.z < H) return 'main';
+    if (!expanded()) return p.z < H + 0.5 ? 'main' : 'out';
+    return p.z < ANNEX_END + 0.5 ? 'annex' : 'out';
+  }
+  const isInside = (p) => region(p) !== 'out';
+  const clampRange = (v, lo, hi) => THREE.MathUtils.clamp(v, lo + 1.3, hi - 1.3);
+
+  // Portals between two regions for this trip (open sides sit near the from→to midpoint).
+  function portals(from, to) {
+    const mx = clampRange((from.x + to.x) / 2, -H, H);
+    const mzMain = clampRange((from.z + to.z) / 2, -H, H);
+    const mzAnnex = clampRange((from.z + to.z) / 2, H, ANNEX_END);
+    const list = [];
+    const add = (a, b, pa, pb) => list.push({ a, b, pa, pb });
+    // horizontal side (a line along x at z = at): gate in the middle if the wall stands
+    const hSide = (side, at, inside, outside, dirIn) => {
+      if (standing(side)) { if (WALLS[side].gate) add(inside, outside, { x: 0, z: at + dirIn }, { x: 0, z: at - dirIn }); }
+      else add(inside, outside, { x: mx, z: at + dirIn }, { x: mx, z: at - dirIn });
+    };
+    const vSide = (side, at, inside, outside, mz, dirIn) => {
+      if (!standing(side)) add(inside, outside, { x: at + dirIn, z: mz }, { x: at - dirIn, z: mz });
+    };
+    hSide('N', -H, 'main', 'out', 1);
+    vSide('W', -H, 'main', 'out', mzMain, 1);
+    vSide('E', H, 'main', 'out', mzMain, -1);
+    if (!expanded()) hSide('S', H, 'main', 'out', -1);
+    else {
+      hSide('S', H, 'main', 'annex', -1);
+      vSide('AW', -H, 'annex', 'out', mzAnnex, 1);
+      vSide('AE', H, 'annex', 'out', mzAnnex, -1);
+      hSide('AS', ANNEX_END, 'annex', 'out', -1);
+    }
+    return list;
+  }
 
   function routeTarget(from, to) {
-    const fromIn = isInside(from);
-    if (fromIn === isInside(to)) return viaCorner(from, to);
-    const H = CAMP_HALF;
-    const mx = clampIn((from.x + to.x) / 2), mz = clampIn((from.z + to.z) / 2);
-    const exits = [[{ x: mx, z: H - 1 }, { x: mx, z: H + 1 }]]; // south is always open
-    exits.push(built.has('wallN') ? [{ x: 0, z: -H + 1 }, { x: 0, z: -H - 1 }] : [{ x: mx, z: -H + 1 }, { x: mx, z: -H - 1 }]);
-    if (!built.has('wallW')) exits.push([{ x: -H + 1, z: mz }, { x: -H - 1, z: mz }]);
-    if (!built.has('wallE')) exits.push([{ x: H - 1, z: mz }, { x: H + 1, z: mz }]);
+    const rf = region(from), rt = region(to);
+    if (rf === rt) return viaCorner(from, to);
+    const ps = portals(from, to);
+    // oriented steps from region r: [near point, far point, next region]
+    const stepsFrom = (r) => ps.flatMap((p) => (p.a === r ? [[p.pa, p.pb, p.b]] : p.b === r ? [[p.pb, p.pa, p.a]] : []));
     let best = null, bestLen = Infinity;
-    for (const [inner, outer] of exits) {
-      const [first, second] = fromIn ? [inner, outer] : [outer, inner];
-      const len = dist2d(from, first) + dist2d(first, second) + dist2d(second, to);
-      if (len < bestLen) { bestLen = len; best = [first, second]; }
+    for (const [n1, f1, r1] of stepsFrom(rf)) {
+      if (r1 === rt) {
+        const len = dist2d(from, n1) + dist2d(n1, f1) + dist2d(f1, to);
+        if (len < bestLen) { bestLen = len; best = [n1, f1]; }
+        continue;
+      }
+      // one region in between (e.g. annex → camp → forest)
+      for (const [n2, f2, r2] of stepsFrom(r1)) {
+        if (r2 !== rt) continue;
+        const len = dist2d(from, n1) + dist2d(n1, f1) + dist2d(f1, n2) + dist2d(n2, f2) + dist2d(f2, to);
+        if (len < bestLen) { bestLen = len; best = [n1, f1]; }
+      }
     }
+    if (!best) return viaCorner(from, to);
     const [first, second] = best;
     // Once lined up with the opening, head through it; otherwise go to its near side first.
     const dx = second.x - first.x, dz = second.z - first.z;
@@ -489,9 +563,9 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
   // Outside the camp, a straight line can run into a wall: hop via the nearest outer corner.
   function viaCorner(from, to) {
     if (isInside(from) || !segBlocked(from, to)) return to;
-    const C = CAMP_HALF + 1.3;
+    const C = H + 1.3, S = expanded() ? ANNEX_END + 1.3 : C;
     let best = to, bestLen = Infinity;
-    for (const [x, z] of [[C, C], [C, -C], [-C, C], [-C, -C]]) {
+    for (const [x, z] of [[C, S], [C, -C], [-C, S], [-C, -C]]) {
       const c = { x, z };
       if (dist2d(from, c) < 0.4 || segBlocked(from, c)) continue;
       const len = dist2d(from, c) + dist2d(c, to);
@@ -532,7 +606,8 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       kind, def, obj, pos: at.clone(), facing: Math.PI, walkT: 0, swingT: 1,
       state: 'idle', target: null, c: null,
     };
-    h.c = makeCarrier(obj, () => def.cap);
+    // workers level up with your bag: they carry 30% of it (never less than their base)
+    h.c = makeCarrier(obj, () => Math.max(def.cap, Math.round(WORKERS.share * player.c.cap())));
     obj.position.copy(h.pos);
     scene.add(obj);
     helpers.push(h);
@@ -588,7 +663,8 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     let intended = 0;
     if (l > 0.001) {
       [dx, dz] = steer(h, dx / l, dz / l);
-      intended = Math.min(l, h.def.speed * dt);
+      const speedBonus = 1 + Math.min(WORKERS.maxSpeedBonus, WORKERS.speedPerBagLevel * levels.bag);
+      intended = Math.min(l, h.def.speed * speedBonus * dt);
       h.pos.x += dx * intended; h.pos.z += dz * intended;
       h.facing = lerpAngle(h.facing, Math.atan2(dx, dz), Math.min(1, dt * 12));
     }
@@ -610,8 +686,8 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
 
   const spots = {
     woodpile: () => new THREE.Vector3(woodpile.pos.x, 0, woodpile.pos.z + 1.05),
-    grillIn: () => new THREE.Vector3(grill.pos.x - 1.3, 0, grill.pos.z),
-    grillOut: () => new THREE.Vector3(grill.pos.x + 1.2, 0, grill.pos.z + 1.15),
+    grillIn: (k = grill) => new THREE.Vector3(k.pos.x - 1.3, 0, k.pos.z),
+    grillOut: (k = grill) => new THREE.Vector3(k.pos.x + trayX(k), 0, k.pos.z + 1.15),
     counter: () => new THREE.Vector3(counter.pos.x, 0, counter.pos.z + 1.1),
   };
 
@@ -689,9 +765,11 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       } else if (rawCount(c) > 0) {
         if (h.target) { h.target.claim = null; h.target = null; } // release the reservation
         h.state = 'deliver';
-        const dest = grill.built ? spots.grillIn() : spots.counter();
+        // closest cooker (a 2nd hunter in the annex feeds the smokehouse), else sell raw
+        const k = nearestCooker(h.pos);
+        const dest = k ? spots.grillIn(k) : spots.counter();
         if (walkTo(h, dest, dt, 0.5)) {
-          if (grill.built) feedGrill(c); else sellFrom(c, dt);
+          if (k) feedGrill(c, k); else sellFrom(c, dt);
         }
       } else {
         h.state = 'idle';
@@ -700,15 +778,16 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     }
 
     if (h.kind === 'cashier') {
-      const has = countOf(c, 'steak') + countOf(c, 'spicy') + countOf(c, 'meat');
-      if (h.state === 'deliver' || (has > 0 && (stackFree(c) <= 0 || grill.out === 0))) {
+      const has = countOf(c, 'steak') + countOf(c, 'spicy') + countOf(c, 'smoked') + countOf(c, 'meat');
+      const ready = nearestCooker(h.pos, (k) => k.out > 0);
+      if (h.state === 'deliver' || (has > 0 && (stackFree(c) <= 0 || !ready))) {
         h.state = 'deliver';
         if (walkTo(h, spots.counter(), dt, 0.5)) {
           sellFrom(c, dt);
           if (c.stack.length === 0 && c.incoming === 0) h.state = 'idle';
         }
-      } else if (grill.built && grill.out > 0) {
-        if (walkTo(h, spots.grillOut(), dt, 0.5)) takeFromGrill(c);
+      } else if (ready) {
+        if (walkTo(h, spots.grillOut(ready), dt, 0.5)) takeFromGrill(c, ready);
       } else if (c.incoming === 0) {
         walkTo(h, spots.counter().add(new THREE.Vector3(-1.4, 0, 0.4)), dt, 0.6);
       }
@@ -756,63 +835,69 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     collectToBack(c, 'log', from);
   }
 
-  // ---------- Grill ----------
-  function feedGrill(c) {
+  // ---------- Cookers: the grill and the smokehouse (k = which one) ----------
+  const trayX = (k) => (k.smoker ? 1.3 : 1.2); // side rack where cooked meat waits
+
+  function feedGrill(c, k = grill) {
     if (c.actT > 0) return;
-    const type = countOf(c, 'toxic') ? 'toxic' : 'meat'; // toxic first: it's the valuable one once cooked
+    const type = countOf(c, 'toxic') ? 'toxic' : 'meat'; // (old saves may still carry toxic meat)
     const it = popStack(c, type);
     if (!it) return;
     c.actT = 0.08;
-    if (c === player.c) learn(type === 'toxic' ? 'toxic' : 'grill');
-    const top = grill.pos.clone().setY(0.8);
-    fx.fly(it.mesh, it.worldPos, () => top, { duration: 0.25, arc: 1, onDone: () => { grill.queue++; grill.queueTypes.push(type); } });
+    if (c === player.c) learn(type === 'toxic' ? 'toxic' : k.smoker ? 'smoker' : 'grill');
+    const top = k.pos.clone().setY(0.8);
+    fx.fly(it.mesh, it.worldPos, () => top, { duration: 0.25, arc: 1, onDone: () => { k.queue++; k.queueTypes.push(type); } });
   }
 
-  function takeFromGrill(c) {
-    if (c.actT > 0 || grill.out <= 0 || stackFree(c) <= 0) return;
+  function takeFromGrill(c, k = grill) {
+    if (c.actT > 0 || k.out <= 0 || stackFree(c) <= 0) return;
     c.actT = 0.08;
-    grill.out--;
-    const type = grill.outTypes.pop() || 'steak';
+    k.out--;
+    const type = k.outTypes.pop() || 'steak';
     if (c === player.c) learn('grillTake');
-    const from = grill.pos.clone().add(new THREE.Vector3(1.2, 0.7, 0));
-    if (grill.visuals.length > grill.out) {
-      const v = grill.visuals.pop();
+    const from = k.pos.clone().add(new THREE.Vector3(trayX(k), 0.7, 0));
+    if (k.visuals.length > k.out) {
+      const v = k.visuals.pop();
       from.copy(v.position);
       scene.remove(v);
     }
     collectToBack(c, type, from);
   }
 
-  function updateGrill(dt) {
-    const fl = grill.obj.userData.flames;
-    const busy = grill.queue > 0;
-    fl[0].scale.y = (busy ? 0.75 : 0.45) + Math.sin(clock * 15) * 0.08;
-    fl[1].scale.y = (busy ? 0.45 : 0.3) + Math.sin(clock * 19) * 0.05;
-    grill.obj.userData.light.intensity = (busy ? 5 : 2.5) + Math.sin(clock * 11) * 0.6;
-    if (!busy) { grill.cookT = 0; return; }
-    grill.cookT += dt;
-    grill.smokeT -= dt;
-    if (grill.smokeT <= 0) {
-      grill.smokeT = 0.18;
-      sfx.play('sizzle', { at: grill.pos, vol: 0.8 });
-      fx.burst(grill.pos.clone().setY(1), 0xdfe6ec, 1, { speed: 0.4, up: 3.5, size: 0.2, life: 0.9 });
+  function updateGrill(dt, k = grill) {
+    const fl = k.obj.userData.flames;
+    const busy = k.queue > 0;
+    if (!k.smoker) {
+      fl[0].scale.y = (busy ? 0.75 : 0.45) + Math.sin(clock * 15) * 0.08;
+      fl[1].scale.y = (busy ? 0.45 : 0.3) + Math.sin(clock * 19) * 0.05;
     }
-    if (grill.cookT >= ECONOMY.cookTime) {
-      grill.cookT = 0;
-      grill.queue--;
-      const cooked = grill.queueTypes.shift() === 'toxic' ? 'spicy' : 'steak';
-      grill.out++;
-      grill.outTypes.push(cooked);
+    k.obj.userData.light.intensity = (busy ? 5 : 2.5) + Math.sin(clock * 11) * 0.6;
+    if (!busy) { k.cookT = 0; return; }
+    k.cookT += dt;
+    k.smokeT -= dt;
+    if (k.smokeT <= 0) {
+      k.smokeT = 0.18;
+      sfx.play('sizzle', { at: k.pos, vol: 0.8 });
+      const puff = k.smoker ? k.pos.clone().add(k.obj.userData.chimney) : k.pos.clone().setY(1);
+      fx.burst(puff, 0xdfe6ec, 1, { speed: 0.4, up: 3.5, size: 0.2, life: 0.9 });
+    }
+    if (k.cookT >= k.cookTime) {
+      k.cookT = 0;
+      k.queue--;
+      const raw = k.queueTypes.shift();
+      const cooked = k.smoker ? 'smoked' : raw === 'toxic' ? 'spicy' : 'steak';
+      k.out++;
+      k.outTypes.push(cooked);
       stats.cooked++;
-      if (grill.visuals.length < 12) {
-        const i = grill.visuals.length;
+      if (k.visuals.length < 12) {
+        const i = k.visuals.length;
         const s = makeItem(cooked);
-        s.position.set(grill.pos.x + 1.2 + ((i % 2) - 0.5) * 0.4, 0.72 + Math.floor(i / 2) * 0.12, grill.pos.z + (Math.floor(i / 2) % 3 - 1) * 0.02);
+        s.position.set(k.pos.x + trayX(k) + ((i % 2) - 0.5) * 0.4, 0.72 + Math.floor(i / 2) * 0.12, k.pos.z + (Math.floor(i / 2) % 3 - 1) * 0.02);
         s.rotation.y = Math.PI / 2;
         scene.add(s);
-        grill.visuals.push(s);
+        k.visuals.push(s);
       }
-      fx.burst(grill.pos.clone().add(new THREE.Vector3(1.2, 0.9, 0)), 0xffc36b, 5, { speed: 2, up: 3, size: 0.08 });
+      fx.burst(k.pos.clone().add(new THREE.Vector3(trayX(k), 0.9, 0)), 0xffc36b, 5, { speed: 2, up: 3, size: 0.08 });
     }
   }
 
@@ -820,18 +905,23 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
   // Wood still needed by the build squares that are open right now.
   const logsNeeded = () => zones.reduce((n, z) => n + (z.state === 'open' && z.currency === 'log' ? z.total - z.paid : 0), 0);
 
+  // Selling speeds up with the bag level (faster ticks, then 2-3 items per tick).
   function sellFrom(c, dt) {
     c.sellT -= dt;
     if (c.sellT > 0) return;
+    c.sellT = ECONOMY.sellTick / PLAYER.sellSpeed(levels.bag);
+    for (let n = PLAYER.sellBatch(levels.bag); n > 0; n--) sellOne(c);
+  }
+
+  function sellOne(c) {
     // most valuable first; raw toxic meat only when there's no grill to cook it (it sells for $0);
     // then any wood nothing can use anymore, so the bag never gets stuck full
-    let type = ['spicy', 'steak', 'meat'].find((t) => countOf(c, t)) || null;
+    let type = ['spicy', 'smoked', 'steak', 'meat'].find((t) => countOf(c, t)) || null;
     if (!type && countOf(c, 'toxic') && !grill.built) type = 'toxic';
     if (!type && c.isPlayer && countOf(c, 'log') > logsNeeded()) type = 'log';
     if (!type) return;
     const it = popStack(c, type);
     if (!it) return;
-    c.sellT = ECONOMY.sellTick;
     const price = PRICE[type];
     if (c.isPlayer && type !== 'toxic') learn(type === 'log' ? 'spareWood' : 'sell');
     const top = counter.pos.clone().setY(1.1);
@@ -984,6 +1074,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     for (let i = 0; i < (b.def.toxic || 0); i++) dropItem('toxic', b.pos);
     for (let i = 0; i < (b.def.plateDrops || 0); i++) dropItem('plate', b.pos, 1.6);
     for (let i = 0; i < (b.def.heartwood || 0); i++) dropItem('heartwood', b.pos, 1.2);
+    for (let i = 0; i < (b.def.vial || 0); i++) dropItem('vial', b.pos, 1.2);
     if (b.def.cash) dropItem('loot', b.pos, 1, b.def.cash);
     if (b.kind === 'poison') {
       // swells, then bursts into a poison cloud: step back!
@@ -1037,6 +1128,20 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
         b.bubbleT -= dt;
         if (b.bubbleT <= 0) { b.bubbleT = 0.25; fx.burst(b.pos.clone().setY(1.2 * b.def.scale), 0x9be36b, 1, { speed: 0.5, up: 2.5, size: 0.14, life: 0.7 }); }
       }
+      // hit by a poison bolt: loses hp every second, armor or not
+      if (b.poisonT > 0) {
+        b.poisonT -= dt;
+        b.poisonAcc = (b.poisonAcc || 0) + dt;
+        if (b.poisonAcc >= 1) {
+          b.poisonAcc -= 1;
+          b.hp -= BALLISTA.poisonDps;
+          b.bar.visible = true;
+          Models.setHealth(b.bar, b.hp / b.maxHp);
+          fx.burst(b.pos.clone().setY(1.2 * b.def.scale), 0x8fe05a, 4, { speed: 1.5, up: 2.5, size: 0.1 });
+          fx.text(b.pos.clone().setY(2 * b.def.scale), String(BALLISTA.poisonDps), 'cash', { life: 0.5, rise: 30 });
+          if (b.hp <= 0) { killBear(b); continue; }
+        }
+      }
       // separation from other bears
       for (const o of bears) {
         if (o === b || o.dying) continue;
@@ -1055,16 +1160,19 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       // Blocked by a wall on the way to you? It chews on it (small damage, bosses hit harder):
       // fences wear down and cost wood to keep up.
       if (!P.dead && dist > reach + 0.1 && moving) {
-        const chew = wallColliders.find((c) => {
+        // walls, or a ballista standing in the way
+        const touching = (c) => {
           const x = THREE.MathUtils.clamp(b.pos.x, c.minX, c.maxX), z = THREE.MathUtils.clamp(b.pos.z, c.minZ, c.maxZ);
           return Math.hypot(b.pos.x - x, b.pos.z - z) < b.def.radius + 0.12;
-        });
+        };
+        const chew = wallColliders.find(touching) || towers.find((t) => t.ballista && touching(t.box))?.box;
         if (chew) {
           b.wallT = (b.wallT ?? b.def.attackRate) - dt;
           if (b.wallT <= 0) {
             b.wallT = b.def.attackRate * 1.4;
             b.lunge = 1;
-            damageWall(chew.wall, b.def.wallHit || 1);
+            if (chew.wall) damageWall(chew.wall, b.def.wallHit || 1);
+            else damageTower(chew.tower, b.def.wallHit || 1);
           }
         }
       }
@@ -1119,6 +1227,12 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
         if (d < bestD) { bestD = d; best = { point: new THREE.Vector3(x, 0, z), wall: w }; }
       }
     }
+    // ballistas are targets too (plain arrow towers aren't worth a log)
+    for (const t of towers) {
+      if (!t.ballista) continue;
+      const d = Math.hypot(b.pos.x - t.x, b.pos.z - t.z);
+      if (d < bestD) { bestD = d; best = { point: new THREE.Vector3(t.x, 0, t.z), wall: null, tower: t }; }
+    }
     return best;
   }
 
@@ -1130,7 +1244,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     const to = aim.point.clone().setY(0.6);
     mesh.position.copy(from);
     scene.add(mesh);
-    thrown.push({ mesh, from, to, t: 0, dur: 1.1, wall: aim.wall, dmg: b.def.wallDamage, hit: b.def.hitDamage });
+    thrown.push({ mesh, from, to, t: 0, dur: 1.1, wall: aim.wall, tower: aim.tower, dmg: b.def.wallDamage, hit: b.def.hitDamage });
     sfx.play('whoosh', { at: b.pos });
   }
 
@@ -1147,6 +1261,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       thrown.splice(i, 1);
       fx.burst(l.to.clone(), 0xb57a3f, 8, { speed: 4, up: 3, size: 0.12 });
       if (l.wall && !l.wall.broken) damageWall(l.wall, l.dmg);
+      else if (l.tower && l.tower.ballista) damageTower(l.tower, l.dmg);
       else if (!player.dead && dist2d(player.pos, l.to) < 1.3) hurtPlayer(l.hit);
       // half the logs stay on the ground: free wood for repairs
       if (Math.random() < 0.5) dropItem('log', l.to, 1.2);
@@ -1190,13 +1305,24 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
   }
 
   const CAMPFIRE = new THREE.Vector3(0, 0, -0.8);
+  // The campfire heals 5 hp/s and cures poison. Once it has healed you back to full, it goes
+  // pale (see-through flames) and recharges for 5 s: no heal, no cure until it's lit again.
+  let fireCd = 0, fireUsed = false;
+  const fireActive = () => fireCd <= 0;
+
   function updatePoisonAndCampfire(dt) {
     const P = player;
+    const wasActive = fireActive();
+    fireCd = Math.max(0, fireCd - dt);
+    if (!wasActive && fireActive()) sfx.play('cure', { at: CAMPFIRE, vol: 0.5 });
+    for (const f of campfire.userData.flames) f.material.opacity = fireActive() ? 1 : 0.22;
     if (P.dead) return;
     const warm = dist2d(P.pos, CAMPFIRE) < POISON.campfireRadius;
+    if (!warm) fireUsed = false;
     if (P.poisonT > 0) {
-      if (warm) {
+      if (warm && fireActive()) {
         P.poisonT = 0;
+        fireUsed = true;
         fx.text(P.pos.clone().setY(2.6), 'CURED!', 'cash', { life: 1, rise: 50 });
         sfx.play('cure');
         fx.burst(P.pos.clone().setY(1), 0xffc36b, 10, { speed: 2, up: 3, size: 0.1 });
@@ -1207,8 +1333,17 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
         if (P.poisonTick >= 1) { P.poisonTick -= 1; hurtPlayer(POISON.dps, true); }
       }
     }
-    // warming up at the fire heals faster
-    if (warm && P.hp < PLAYER.maxHp) P.hp = Math.min(PLAYER.maxHp, P.hp + POISON.campfireHeal * dt);
+    // warming up at the fire heals fast...
+    if (warm && fireActive() && P.hp < PLAYER.maxHp) {
+      P.hp = Math.min(PLAYER.maxHp, P.hp + POISON.campfireHeal * dt);
+      fireUsed = true;
+    }
+    // ...then it needs to recharge once you're back to full
+    if (warm && fireActive() && fireUsed && P.hp >= PLAYER.maxHp && P.poisonT <= 0) {
+      fireUsed = false;
+      fireCd = POISON.campfireRecharge;
+      fx.text(CAMPFIRE.clone().setY(2), 'RECHARGING…', 'warn', { life: 1.2, rise: 40 });
+    }
     hud.setPoison(P.poisonT > 0);
   }
 
@@ -1243,48 +1378,77 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
   // ---------- Ballista upgrade (heartwood from the log thrower + cash) ----------
   // Once you've picked up your first heartwood, a gold square rings every arrow tower:
   // stand next to the tower to pay, and it turns into a ballista.
+  // Two upgrades, each a gold square around the tower, paid in several resources:
+  //  - BALLISTA (arrow tower → ballista): heartwood + logs + cash, once you've found heartwood
+  //  - POISON BOLTS (ballista → poison ballista): poison vial + logs + cash, once you've found a vial
+  const ITEM_ICON = { heartwood: '🌟', vial: '🧪', logs: '🪵', cash: '💵' };
+  const upgradeFor = (t) => {
+    if (!t.ballista && built.has('firstHeartwood')) return { kind: 'ballista', name: 'BALLISTA', cost: BALLISTA.cost };
+    if (t.ballista && !t.poison && built.has('firstVial')) return { kind: 'poison', name: 'POISON BOLTS', cost: BALLISTA.poisonCost };
+    return null;
+  };
+
+  function clearUp(t) {
+    if (!t.up) return;
+    scene.remove(t.up.pad); t.up.label.remove(); t.up = null;
+  }
+
   function updateBallistaUpgrades(dt) {
-    const unlockedUp = built.has('firstHeartwood');
     for (const t of towers) {
-      if (t.ballista || !unlockedUp) continue;
+      const want = upgradeFor(t);
+      if (!want) { clearUp(t); continue; }
+      if (t.up && t.up.kind !== want.kind) clearUp(t);
       if (!t.up) {
-        const pad = Models.makePad(0xffc84a);
+        const pad = Models.makePad(want.kind === 'poison' ? 0x8fe05a : 0xffc84a);
         pad.scale.setScalar(1.55);
         pad.position.set(t.x, 0, t.z);
         scene.add(pad);
-        t.up = { pad, label: makeLabel(), cash: 0, wood: 0, payT: 0 };
+        t.up = { kind: want.kind, pad, label: makeLabel(), paid: {}, payT: 0 };
       }
-      const u = t.up;
-      const leftCash = BALLISTA.cash - u.cash, leftWood = BALLISTA.heartwood - u.wood;
-      u.label.innerHTML = `<div><span class="name">BALLISTA</span>🌟 ${leftWood} · 💵 ${leftCash}</div>`;
-      Models.setPadProgress(u.pad, (u.cash / BALLISTA.cash + u.wood / BALLISTA.heartwood) / 2);
+      const u = t.up, cost = want.cost;
+      const left = (k) => cost[k] - (u.paid[k] || 0);
+      const keys = Object.keys(cost);
+      u.label.innerHTML = `<div><span class="name">${want.name}</span>${keys.map((k) => `${ITEM_ICON[k]} ${left(k)}`).join(' · ')}</div>`;
+      Models.setPadProgress(u.pad, keys.reduce((s, k) => s + (u.paid[k] || 0) / cost[k], 0) / keys.length);
       const s = fx.toScreen(new THREE.Vector3(t.x, 0.2, t.z + 1.7));
       u.label.style.left = s.x + 'px'; u.label.style.top = s.y + 'px';
       u.payT -= dt;
       if (player.dead || dist2d(player.pos, t) > 1.75 || u.payT > 0) continue;
       u.payT = ECONOMY.payTick;
       const target = new THREE.Vector3(t.x, 1.6, t.z);
-      const wood = leftWood > 0 && popStack(player.c, 'heartwood');
-      if (wood) {
-        u.wood++;
-        fx.fly(wood.mesh, wood.worldPos, () => target, { duration: 0.35, arc: 1.6 });
-      } else if (leftCash > 0 && cash > 0) {
-        const chunk = Math.min(cash, leftCash, Math.ceil(BALLISTA.cash / 20));
-        u.cash += chunk;
-        setCash(cash - chunk);
-        fx.fly(Models.makeCash(), player.pos.clone().setY(1.2), () => target, { duration: 0.28, arc: 1.4 });
+      // special item first, then logs, then cash
+      for (const k of keys) {
+        if (left(k) <= 0) continue;
+        if (k === 'cash') {
+          if (cash <= 0) continue;
+          const chunk = Math.min(cash, left(k), Math.ceil(cost.cash / 20));
+          u.paid.cash = (u.paid.cash || 0) + chunk;
+          setCash(cash - chunk);
+          fx.fly(Models.makeCash(), player.pos.clone().setY(1.2), () => target, { duration: 0.28, arc: 1.4 });
+        } else {
+          const it = popStack(player.c, k === 'logs' ? 'log' : k);
+          if (!it) continue;
+          u.paid[k] = (u.paid[k] || 0) + 1;
+          fx.fly(it.mesh, it.worldPos, () => target, { duration: 0.3, arc: 1.5 });
+        }
+        sfx.play('place');
+        break;
       }
-      if (u.wood >= BALLISTA.heartwood && u.cash >= BALLISTA.cash) toBallista(t);
+      if (keys.every((k) => left(k) <= 0)) {
+        clearUp(t);
+        if (want.kind === 'ballista') toBallista(t); else toPoisonBallista(t);
+      }
     }
   }
 
   function toBallista(t, silent = false) {
-    if (t.up) { scene.remove(t.up.pad); t.up.label.remove(); t.up = null; }
+    clearUp(t);
     scene.remove(t.obj);
     t.obj = Models.makeBallista();
     t.obj.position.set(t.x, 0.12, t.z);
     scene.add(t.obj);
-    Object.assign(t, { ballista: true, range: BALLISTA.range, fireRate: BALLISTA.fireRate, damage: BALLISTA.damage });
+    Object.assign(t, { ballista: true, range: BALLISTA.range, fireRate: BALLISTA.fireRate, damage: BALLISTA.damage, hp: BALLISTA.hp });
+    if (!t.bar) { t.bar = Models.makeHealthBar(1.4, 0xffc84a); t.bar.visible = false; scene.add(t.bar); }
     if (silent) return;
     t.obj.scale.setScalar(0.01);
     popIns.push({ obj: t.obj, t: 0 });
@@ -1297,6 +1461,58 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     learn('ballista');
     save();
   }
+
+  // Poison bolts: a green vial on the platform, bolts poison what they hit.
+  function toPoisonBallista(t, silent = false) {
+    t.poison = true;
+    const vial = Models.makeVial();
+    vial.position.set(0, 2.7, -0.4);
+    vial.scale.setScalar(1.4);
+    t.obj.add(vial);
+    if (silent) return;
+    const at = new THREE.Vector3(t.x, 2.5, t.z);
+    fx.burst(at, 0x8fe05a, 24, { speed: 5, up: 5, size: 0.18 });
+    fx.text(at.clone().setY(4), 'POISON BOLTS!', 'warn', { life: 1.4, rise: 80 });
+    sfx.play('levelup'); sfx.play('poison');
+    events.push({ type: 'poisonBallista', id: t.id, t: clock });
+    learn('poisonBolts');
+    save();
+  }
+
+  // Ballistas can be destroyed (thrown logs, bosses and bears chewing on them).
+  function damageTower(t, dmg) {
+    if (!t.ballista) return; // plain arrow towers are sturdy
+    t.hp -= dmg;
+    t.bar.visible = true;
+    Models.setHealth(t.bar, t.hp / BALLISTA.hp);
+    sfx.play('crack', { at: t, vol: 0.7 });
+    fx.burst(new THREE.Vector3(t.x, 2, t.z), 0xb57a3f, 5, { speed: 3, up: 3, size: 0.12 });
+    if (t.hp <= 0) destroyBallista(t);
+  }
+
+  // Falls back to an arrow tower and drops its heartwood (and vial) to rebuild it with wood + cash.
+  function destroyBallista(t) {
+    const at = new THREE.Vector3(t.x, 1, t.z);
+    const wasPoison = t.poison;
+    scene.remove(t.obj);
+    t.obj = Models.makeTower();
+    t.obj.position.set(t.x, 0.12, t.z);
+    scene.add(t.obj);
+    Object.assign(t, { ballista: false, poison: false, range: TOWER.range, fireRate: TOWER.fireRate, damage: TOWER.damage, hp: 0 });
+    if (t.bar) t.bar.visible = false;
+    fx.burst(at, 0xd09a5e, 30, { speed: 6, up: 5, size: 0.2 });
+    fx.text(at.clone().setY(3.5), 'BALLISTA DESTROYED!', 'hurt', { life: 1.6, rise: 80 });
+    fx.addShake(0.4);
+    sfx.play('crash', { at });
+    // hand the special parts back, on the camp side of the tower
+    const inward = new THREE.Vector3(-t.x, 0, -t.z).normalize().multiplyScalar(1.6).add(at);
+    dropItem('heartwood', inward, 0.8);
+    if (wasPoison) dropItem('vial', inward, 0.8);
+    events.push({ type: 'ballistaDestroyed', id: t.id, t: clock });
+    save();
+  }
+
+  const POISON_BOLT = new THREE.MeshBasicMaterial({ color: 0x8fe05a });
 
   // ---------- Towers ----------
   function updateTowers(dt) {
@@ -1318,10 +1534,16 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
           if (t.ballista) arrow.scale.setScalar(1.9); // heavy bolt
           arrow.position.set(t.x, t.ballista ? 3 : 2.7, t.z);
           scene.add(arrow);
-          arrows.push({ obj: arrow, target, last: target.pos.clone(), dmg: t.damage, pierce: t.ballista, speed: t.ballista ? BALLISTA.boltSpeed : TOWER.arrowSpeed });
+          if (t.poison) arrow.children.forEach((m) => { m.material = POISON_BOLT; });
+          arrows.push({ obj: arrow, target, last: target.pos.clone(), dmg: t.damage, pierce: t.ballista, poison: t.poison, speed: t.ballista ? BALLISTA.boltSpeed : TOWER.arrowSpeed });
           sfx.play(t.ballista ? 'bolt' : 'arrow', { at: arrow.position });
         }
       } else head.rotation.y += dt * 0.5;
+      if (t.bar) {
+        t.bar.position.set(t.x, 4.6, t.z);
+        t.bar.quaternion.copy(camera.quaternion);
+        if (t.hp >= BALLISTA.hp) t.bar.visible = false;
+      }
     }
     for (let i = arrows.length - 1; i >= 0; i--) {
       const a = arrows[i];
@@ -1330,7 +1552,10 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       const d = dir.length();
       const step = a.speed * dt;
       if (d <= step + 0.2) {
-        if (bears.includes(a.target) && !a.target.dying) hurtBear(a.target, a.dmg, null, a.pierce);
+        if (bears.includes(a.target) && !a.target.dying) {
+          hurtBear(a.target, a.dmg, null, a.pierce);
+          if (a.poison && !a.target.dying) a.target.poisonT = BALLISTA.poisonTime; // refreshes
+        }
         scene.remove(a.obj);
         arrows.splice(i, 1);
         continue;
@@ -1449,27 +1674,37 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     const openLog = zones.filter((z) => z.state === 'open' && z.currency === 'log');
     const logZone = openLog.find((z) => z.def.kind === 'grill') || openLog[0];
     const byRemaining = (a, b) => (a.total - a.paid) - (b.total - b.paid);
+    // buildings can be paid bit by bit; endless upgrades only when they can be paid in full
+    // (otherwise the autopilot pours every dollar into them and never saves for the expansion)
     const cashZone = zones.filter((z) => z.state === 'open' && z.currency === 'cash' && cash > 0).sort(byRemaining)[0]
-      || upgrades.filter((z) => z.state === 'open' && z.currency === 'cash' && cash > 0).sort(byRemaining)[0];
+      || upgrades.filter((z) => z.state === 'open' && z.currency === 'cash' && cash >= z.total - z.paid).sort(byRemaining)[0];
     const drop = drops.filter((d) => !d.claim).sort((a, b) => a.pos.distanceTo(p) - b.pos.distanceTo(p))[0];
     if (counter.pileValue > 0) return new THREE.Vector3(counter.pos.x + 1.5, 0, counter.pos.z + 0.3);
-    if ((countOf(c, 'steak') || countOf(c, 'spicy')) && counter.built) return spots.counter();
+    if ((countOf(c, 'steak') || countOf(c, 'spicy') || countOf(c, 'smoked')) && counter.built) return spots.counter();
     // (before the sell table exists there's nowhere to take meat: keep chopping instead of freezing)
-    if (rawCount(c) && (full || !drop) && (grill.built || counter.built)) return grill.built ? spots.grillIn() : spots.counter();
+    const cook = nearestCooker(p);
+    if (rawCount(c) && (full || !drop) && (cook || counter.built)) return cook ? spots.grillIn(cook) : spots.counter();
     // boss extras: forge armor with plates, patch damaged walls with wood
     const armorPad = upgrades.find((u) => u.def.id === 'armor' && u.state === 'open');
     if (armorPad && countOf(c, 'plate')) return new THREE.Vector3(armorPad.def.x, 0, armorPad.def.z);
-    const plainTower = towers.find((t) => !t.ballista);
-    if (plainTower && countOf(c, 'heartwood') && cash >= 50) {
-      // stand on the camp side of the tower
-      const dx = -plainTower.x, dz = -plainTower.z, l = Math.hypot(dx, dz) || 1;
-      return new THREE.Vector3(plainTower.x + (dx / l) * 1.3, 0, plainTower.z + (dz / l) * 1.3);
+    // ballista / poison-bolt upgrades: carry the special item + some cash to the tower
+    const upTower = towers.find((t) => t.up && ((t.up.kind === 'ballista' && countOf(c, 'heartwood') && countOf(c, 'log') >= BALLISTA.cost.logs)
+      || (t.up.kind === 'poison' && countOf(c, 'vial') && countOf(c, 'log') >= BALLISTA.poisonCost.logs)));
+    if (upTower && cash >= 50) {
+      // stand on the inner side of the tower (toward the middle of its camp area)
+      const cz = upTower.z > H ? (H + ANNEX_END) / 2 : 0;
+      const dx = -upTower.x, dz = cz - upTower.z, l = Math.hypot(dx, dz) || 1;
+      return new THREE.Vector3(upTower.x + (dx / l) * 1.3, 0, upTower.z + (dz / l) * 1.3);
     }
     const hurtWall = walls.find((w) => w.pad);
     if (hurtWall && countOf(c, 'log') >= 3) return new THREE.Vector3(hurtWall.def.x, 0, hurtWall.def.z);
-    if (logs && logZone && (full || logs >= logZone.total - logZone.paid || (woodpile.count === 0 && logs >= 10))) return new THREE.Vector3(logZone.def.x, 0, logZone.def.z);
+    // holding a heartwood / vial: keep the wood for that tower upgrade instead of spending it
+    const savingWood = (countOf(c, 'heartwood') && towers.some((t) => t.up?.kind === 'ballista'))
+      || (countOf(c, 'vial') && towers.some((t) => t.up?.kind === 'poison'));
+    if (!savingWood && logs && logZone && (full || logs >= Math.min(10, logZone.total - logZone.paid))) return new THREE.Vector3(logZone.def.x, 0, logZone.def.z);
     if (cashZone && cash >= Math.min(20, cashZone.total - cashZone.paid)) return new THREE.Vector3(cashZone.def.x, 0, cashZone.def.z);
-    if (grill.out > 0 && !full && !helpers.some((h) => h.kind === 'cashier')) return spots.grillOut();
+    const ready = nearestCooker(p, (k) => k.out > 0);
+    if (ready && !full && !helpers.some((h) => h.kind === 'cashier')) return spots.grillOut(ready);
     if (woodpile.count > 0 && !full && logZone) return spots.woodpile();
     if (drop && !full) return drop.pos;
     if (!full) {
@@ -1487,6 +1722,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
         v: 1, cash, built: [...built], levels, wave: waves.n, woodpile: woodpile.count,
         walls: Object.fromEntries(walls.map((w) => [w.side, Math.round(w.hp)])),
         ballistas: towers.filter((t) => t.ballista).map((t) => t.id),
+        poisonBallistas: towers.filter((t) => t.poison).map((t) => t.id),
         paid: Object.fromEntries([...zones, ...upgrades].filter((z) => z.state === 'open' && z.paid > 0).map((z) => [z.def.id, z.paid])),
       }));
     } catch { /* storage unavailable: play without saving */ }
@@ -1502,6 +1738,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     for (const id of s.built || []) built.add(id);
     refreshUnlocks();
     for (const t of towers) if (s.ballistas?.includes(t.id)) toBallista(t, true);
+    for (const t of towers) if (t.ballista && s.poisonBallistas?.includes(t.id)) toPoisonBallista(t, true);
     for (const w of walls) {
       const hp = s.walls?.[w.side];
       if (hp !== undefined && hp < WALL.hp) { w.hp = WALL.hp; if (hp <= 0) damageWall(w, WALL.hp); else { w.hp = hp; wallLook(w); } }
@@ -1585,7 +1822,12 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       else tips.push({ key: 'toxicNoGrill', info: 8, icon: '🤢', text: 'Toxic meat is worth $0 raw. Build the GRILL to cook it for $30' });
     }
     const plainTower = towers.find((t) => !t.ballista);
-    if (countOf(c, 'heartwood') && plainTower) tips.push({ key: 'ballista', icon: '🌟', text: 'Heartwood! Stand by an arrow tower to turn it into a BALLISTA (12 m reach)', pos: new THREE.Vector3(plainTower.x, 0, plainTower.z) });
+    if (countOf(c, 'heartwood') && plainTower) tips.push({ key: 'ballista', icon: '🌟', text: 'Heartwood! Bring it + 20 wood + $250 to an arrow tower: BALLISTA (12 m, 9 damage)', pos: new THREE.Vector3(plainTower.x, 0, plainTower.z) });
+    const plainBallista = towers.find((t) => t.ballista && !t.poison);
+    if (countOf(c, 'vial') && plainBallista) tips.push({ key: 'poisonBolts', icon: '🧪', text: 'Poison vial! Bring it + 15 wood + $150 to a ballista: POISON BOLTS', pos: new THREE.Vector3(plainBallista.x, 0, plainBallista.z) });
+    if (countOf(c, 'vial') && !plainBallista && !towers.some((t) => t.poison)) tips.push({ key: 'vialKeep', info: 6, icon: '🧪', text: 'Keep this poison vial: it will give a ballista poison bolts' });
+    if (!fireActive() && dist2d(P.pos, CAMPFIRE) < 4) tips.push({ key: 'fireRecharge', info: 5, icon: '🔥', text: 'The campfire is recharging: it heals again in a few seconds' });
+    if (smoker.built && rawCount(c)) tips.push({ key: 'smoker', icon: '🏭', text: 'The SMOKEHOUSE cooks twice as fast: smoked meat sells for $20', pos: smoker.pos.clone() });
     const hurtWall = walls.find((w) => w.pad);
     if (hurtWall) tips.push({ key: 'repair', icon: '🔨', text: `${hurtWall.name} is ${hurtWall.broken ? 'broken' : 'damaged'}! Bring wood to its REPAIR square`, pos: padPos({ def: hurtWall.def }) });
 
@@ -1628,6 +1870,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
   stationLabel('SELL TABLE<small>meat & spare wood → 💵</small>', () => counter.pos.clone().setY(2.6), () => counter.built, 'sell');
   stationLabel('💵 PICK UP', () => new THREE.Vector3(counter.pos.x + 1.5, 1.4, counter.pos.z + 0.3), () => counter.built && counter.pile.length > 0 && !learned.has('cash'));
   stationLabel('GRILL<small>raw meat → $12 steak</small>', () => grill.pos.clone().setY(2), () => grill.built, 'grill');
+  stationLabel('SMOKEHOUSE<small>2× faster · $20 smoked meat</small>', () => smoker.pos.clone().setY(2.6), () => smoker.built, 'smoker');
   stationLabel('WOOD STORAGE<small>your lumberjack fills it</small>', () => woodpile.pos.clone().setY(1.9), () => woodpile.built, 'woodpile');
 
   let infoShown = 0;
@@ -1821,6 +2064,11 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
         built.add('firstHeartwood');
         save();
       }
+      if (d.type === 'vial' && !built.has('firstVial')) {
+        // first poison vial ever: ballistas can now get poison bolts
+        built.add('firstVial');
+        save();
+      }
     }
 
     // --- zones & upgrade pads ---
@@ -1851,11 +2099,11 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     // --- stations the player interacts with by standing close ---
     P.c.actT -= dt;
     if (counter.built) updateCounter(dt);
-    if (grill.built) {
-      updateGrill(dt);
-      if (!P.dead && dist2d(P.pos, grill.pos) < 2.0) {
-        if (rawCount(P.c)) feedGrill(P.c);
-        else takeFromGrill(P.c);
+    for (const k of builtCookers()) {
+      updateGrill(dt, k);
+      if (!P.dead && dist2d(P.pos, k.pos) < 2.0) {
+        if (rawCount(P.c)) feedGrill(P.c, k);
+        else takeFromGrill(P.c, k);
       }
     }
     updateWalls(dt);
@@ -1894,7 +2142,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     const fl = campfire.userData.flames;
     fl[0].scale.y = 0.6 + Math.sin(clock * 17) * 0.08 + Math.sin(clock * 7.3) * 0.05;
     fl[1].scale.y = 0.35 + Math.sin(clock * 21) * 0.06;
-    campfire.userData.light.intensity = 5 + Math.sin(clock * 13) * 0.8;
+    campfire.userData.light.intensity = (fireActive() ? 5 : 1.2) + Math.sin(clock * 13) * 0.8;
 
     updateGuidance(dt);
 

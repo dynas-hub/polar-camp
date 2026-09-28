@@ -174,8 +174,8 @@ export function makeTent() {
   return g;
 }
 
-export function makeCampFloor() {
-  const size = CAMP_HALF * 2;
+// Wooden floor: the main camp by default; (width, depth) for the expansion.
+export function makeCampFloor(width = CAMP_HALF * 2, depth = CAMP_HALF * 2) {
   const c = document.createElement('canvas');
   c.width = c.height = 512;
   const x = c.getContext('2d');
@@ -193,7 +193,10 @@ export function makeCampFloor() {
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = 4;
-  const floor = new THREE.Mesh(new THREE.BoxGeometry(size, 0.12, size), [
+  // keep the planks the same size on a non-square floor
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(width / 12, depth / 12);
+  const floor = new THREE.Mesh(new THREE.BoxGeometry(width, 0.12, depth), [
     M.woodDark, M.woodDark, new THREE.MeshLambertMaterial({ map: tex }), M.woodDark, M.woodDark, M.woodDark,
   ]);
   floor.position.y = 0.06;
@@ -469,35 +472,73 @@ export function makeCounter() {
   return g;
 }
 
-// Palisade wall along one camp edge. Returns the mesh group and its colliders (AABBs).
-export function makeWall(side) {
+// Palisade wall from a WALLS line { axis, at, from, to, gate }.
+// axis 'x' runs along x at z = at; axis 'z' runs along z at x = at. A gate leaves a 3.2 m gap.
+// Returns the mesh group and its colliders (AABBs).
+export function makeWall(line) {
   const g = new THREE.Group();
   const colliders = [];
-  const H = CAMP_HALF;
-  const segs = side === 'N' ? [[-H, -1.6], [1.6, H]] : [[-H, H]];
+  const mid0 = (line.from + line.to) / 2;
+  const segs = line.gate ? [[line.from, mid0 - 1.6], [mid0 + 1.6, line.to]] : [[line.from, line.to]];
+  const alongX = line.axis === 'x';
   for (const [a, b] of segs) {
     for (let t = a; t <= b + 0.001; t += 0.36) {
-      const h = 1.35 + ((Math.sin(t * 12.9898) * 43758.5453) % 1 + 1) % 1 * 0.3;
+      const h = 1.35 + ((Math.sin(t * 12.9898 + line.at) * 43758.5453) % 1 + 1) % 1 * 0.3;
       const stake = new THREE.Group();
       stake.add(part(G.cylLo, M.wood, 0.17, h, 0.17, 0, h / 2, 0));
       stake.add(part(G.cone, M.wood, 0.17, 0.32, 0.17, 0, h + 0.16, 0));
       stake.add(part(G.cylLo, M.snow, 0.17, 0.06, 0.17, 0, h - 0.02, 0));
-      if (side === 'N') stake.position.set(t, 0, -H);
-      else stake.position.set(side === 'W' ? -H : H, 0, t);
+      if (alongX) stake.position.set(t, 0, line.at); else stake.position.set(line.at, 0, t);
       g.add(stake);
     }
-    // horizontal beam
+    // horizontal beam, on the camp side
     const len = b - a, mid = (a + b) / 2;
-    if (side === 'N') {
-      g.add(part(G.box, M.woodDark, len, 0.14, 0.12, mid, 0.9, -H + 0.18));
-      colliders.push({ minX: a - 0.2, maxX: b + 0.2, minZ: -H - 0.25, maxZ: -H + 0.25 });
+    const inward = line.at > 0 ? -0.18 : 0.18;
+    if (alongX) {
+      g.add(part(G.box, M.woodDark, len, 0.14, 0.12, mid, 0.9, line.at + inward));
+      colliders.push({ minX: a - 0.2, maxX: b + 0.2, minZ: line.at - 0.25, maxZ: line.at + 0.25 });
     } else {
-      const x = side === 'W' ? -H : H;
-      g.add(part(G.box, M.woodDark, 0.12, 0.14, len, x + (side === 'W' ? 0.18 : -0.18), 0.9, mid));
-      colliders.push({ minX: x - 0.25, maxX: x + 0.25, minZ: a - 0.2, maxZ: b + 0.2 });
+      g.add(part(G.box, M.woodDark, 0.12, 0.14, len, line.at + inward, 0.9, mid));
+      colliders.push({ minX: line.at - 0.25, maxX: line.at + 0.25, minZ: a - 0.2, maxZ: b + 0.2 });
     }
   }
   return { group: g, colliders };
+}
+
+// Improved oven for the camp expansion: a stone smokehouse with a chimney and a side rack.
+export function makeSmokehouse() {
+  const g = new THREE.Group();
+  const stone = mat(0x8d98a3), dark = mat(0x5b6570);
+  g.add(part(G.box, stone, 1.5, 1.1, 1.3, 0, 0.55, 0));
+  g.add(part(G.box, dark, 0.7, 0.55, 0.06, 0, 0.45, 0.66)); // oven mouth
+  const glow = part(G.box, M.fire, 0.55, 0.35, 0.02, 0, 0.4, 0.68);
+  glow.castShadow = false;
+  g.add(glow);
+  const roof = part(G.cone4, M.roof, 1.2, 0.6, 1.1, 0, 1.4, 0);
+  roof.rotation.y = Math.PI / 4;
+  g.add(roof);
+  g.add(part(G.box, stone, 0.3, 1.0, 0.3, 0.45, 1.7, -0.35)); // chimney
+  // side rack for the smoked meat
+  g.add(part(G.box, M.plank, 0.9, 0.1, 1.1, 1.3, 0.55, 0));
+  for (const [x, z] of [[0.95, -0.45], [1.65, -0.45], [0.95, 0.45], [1.65, 0.45]]) g.add(part(G.box, M.woodDark, 0.08, 0.55, 0.08, x, 0.27, z));
+  const light = new THREE.PointLight(0xff8a30, 3, 4, 1.5);
+  light.position.set(0, 0.6, 1);
+  g.add(light);
+  g.userData = { flames: [glow, glow], light, chimney: new THREE.Vector3(0.45, 2.3, -0.35) };
+  return g;
+}
+
+// Poison vial (dropped by the poison bear): glass flask with glowing green liquid.
+export function makeVial() {
+  const g = new THREE.Group();
+  const glass = new THREE.MeshLambertMaterial({ color: 0xd8f5ff, transparent: true, opacity: 0.45 });
+  const liquid = mat(0x7fe04a, { emissive: 0x2a6a10 });
+  g.add(part(G.sphereLo, liquid, 0.18, 0.16, 0.18, 0, 0, 0));
+  g.add(part(G.sphere, glass, 0.22, 0.2, 0.22, 0, 0.02, 0));
+  g.add(part(G.cylLo, glass, 0.07, 0.18, 0.07, 0, 0.26, 0));
+  g.add(part(G.cylLo, M.woodDark, 0.08, 0.06, 0.08, 0, 0.37, 0)); // cork
+  g.userData.h = 0.42;
+  return g;
 }
 
 // ---------- UI-in-world ----------
