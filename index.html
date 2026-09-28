@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#cfe3f2">
+  <!-- "Add to Home Screen" opens full screen like an app (iPhone + Android) -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Polar Camp">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <title>Polar Camp</title>
+  <link rel="stylesheet" href="style.css">
+  <script type="importmap">
+    { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js" } }
+  </script>
+</head>
+<body>
+  <div id="stage">
+    <canvas id="game"></canvas>
+    <div id="labels"></div>
+
+    <div id="hud">
+      <div class="pill" id="cash-pill"><span class="ico">💵</span><span id="cash">0</span></div>
+      <div class="pill small" id="bag-pill"><span class="ico">🎒</span><span id="bag">0/12</span></div>
+    </div>
+
+    <div id="wave">
+      <div id="wave-title">WAVE 1</div>
+      <div id="wave-bar"><div id="wave-fill"></div></div>
+    </div>
+
+    <div id="hp"><div id="hp-fill"></div></div>
+
+    <div id="banner"></div>
+
+    <div id="joy-base"><div id="joy-knob"></div></div>
+
+    <div id="defeat" class="hidden">
+      <div class="defeat-card">
+        <div class="defeat-title">DEFEAT</div>
+        <div class="defeat-sub">The bears got you.</div>
+        <button id="retry">TRY AGAIN</button>
+      </div>
+    </div>
+
+    <div id="title-screen">
+      <div class="logo">POLAR<br>CAMP</div>
+      <div class="tag">Chop. Build. Survive the bears.</div>
+      <button id="play">PLAY</button>
+      <div class="hint">Drag anywhere to move · WASD on desktop</div>
+    </div>
+  </div>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
