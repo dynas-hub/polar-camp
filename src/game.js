@@ -257,6 +257,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       fx.text(at.clone().setY(2.5), (d.kind === 'hire' ? d.name.replace('HIRE ', '') + ' HIRED' : d.name) + '!', 'warn', { life: 1.3, rise: 80 });
       fx.addShake(0.25);
       events.push({ type: 'build', id: d.id, t: clock });
+      learn(z.currency === 'log' ? 'build' : 'buy');
       save();
     }
     refreshUnlocks();
@@ -330,6 +331,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     fx.text(player.pos.clone().setY(2.6), `${u.def.name} LV${u.level + 1}!`, 'warn', { life: 1.2, rise: 80 });
     fx.addShake(0.15);
     events.push({ type: 'upgrade', id: u.def.id, level: u.level, t: clock });
+    learn('buy');
     if (u.def.id === 'bag') layoutStack(player.c);
     applyLevel(u);
     save();
@@ -382,9 +384,15 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     return best;
   }
 
-  // Does the segment a→b cross a wall (expanded by r)? Slab test per AABB.
-  function segBlocked(a, b, r = 0.45) {
-    const dx = b.x - a.x, dz = b.z - a.z;
+  // Does the segment a→b cross a wall (expanded by the walker's body radius)? Slab test per AABB.
+  // The last 0.7 m are ignored: walkers stop short of their target (pick-up reach), so a target
+  // lying right against a wall must not count as "behind" it (that made the hunter pace back
+  // and forth between two corners forever).
+  function segBlocked(a, b, r = 0.4) {
+    let dx = b.x - a.x, dz = b.z - a.z;
+    const len = Math.hypot(dx, dz);
+    if (len <= 0.7) return false;
+    dx *= (len - 0.7) / len; dz *= (len - 0.7) / len;
     for (const w of wallColliders) {
       let t0 = 0, t1 = 1;
       for (const [p, d, lo, hi] of [[a.x, dx, w.minX - r, w.maxX + r], [a.z, dz, w.minZ - r, w.maxZ + r]]) {
@@ -596,6 +604,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
   function takeWood(c) {
     if (woodpile.count <= 0 || stackFree(c) <= 0) return;
     woodpile.count--;
+    if (c === player.c) learn('woodpile');
     const from = woodpile.pos.clone().setY(0.6);
     if (woodpile.visuals.length > woodpile.count) {
       const v = woodpile.visuals.pop();
@@ -611,6 +620,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     const it = popStack(c, 'meat');
     if (!it) return;
     c.actT = 0.08;
+    if (c === player.c) learn('grill');
     const top = grill.pos.clone().setY(0.8);
     fx.fly(it.mesh, it.worldPos, () => top, { duration: 0.25, arc: 1, onDone: () => { grill.queue++; } });
   }
@@ -619,6 +629,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     if (c.actT > 0 || grill.out <= 0 || stackFree(c) <= 0) return;
     c.actT = 0.08;
     grill.out--;
+    if (c === player.c) learn('grillTake');
     const from = grill.pos.clone().add(new THREE.Vector3(1.2, 0.7, 0));
     if (grill.visuals.length > grill.out) {
       const v = grill.visuals.pop();
@@ -673,6 +684,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     if (!it) return;
     c.sellT = ECONOMY.sellTick;
     const price = type === 'steak' ? ECONOMY.steakPrice : type === 'meat' ? ECONOMY.meatPrice : ECONOMY.logPrice;
+    if (c.isPlayer) learn(type === 'log' ? 'spareWood' : 'sell');
     const top = counter.pos.clone().setY(1.1);
     fx.fly(it.mesh, it.worldPos, () => top, {
       duration: 0.25, arc: 1,
@@ -707,7 +719,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       scene.remove(bill.mesh);
       fx.fly(bill.mesh, from, () => player.pos.clone().setY(1.3), {
         duration: 0.22, arc: 0.8,
-        onDone: () => { setCash(cash + value); hud.bumpCash(); fx.text(player.pos.clone().setY(2.4), `+$${value}`, 'cash', { life: 0.6, rise: 40 }); },
+        onDone: () => { setCash(cash + value); hud.bumpCash(); learn('cash'); fx.text(player.pos.clone().setY(2.4), `+$${value}`, 'cash', { life: 0.6, rise: 40 }); },
       });
     }
   }
@@ -743,7 +755,10 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       tmpA.subVectors(b.pos, from).setY(0).normalize().multiplyScalar(b.mega ? 0.15 : 0.45);
       b.pos.add(tmpA);
     }
-    if (b.hp <= 0) killBear(b);
+    if (b.hp <= 0) {
+      killBear(b);
+      if (from) learn('fight'); // `from` is set only for the player's axe (towers pass null)
+    }
   }
 
   function killBear(b) {
@@ -757,7 +772,8 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     for (let i = 0; i < b.def.meat; i++) {
       const mesh = Models.makeMeat();
       const land = b.pos.clone().add(new THREE.Vector3((Math.random() - 0.5) * 2.2, 0.2, (Math.random() - 0.5) * 2.2));
-      resolve(land, 0.35, true); // never inside a wall, a building or a tree trunk (unreachable)
+      // never inside or hugging a wall, a building or a tree trunk: leave room to walk up to it
+      resolve(land, 0.8, true);
       fx.fly(mesh, b.pos.clone().setY(0.8), () => land, {
         duration: 0.45, arc: 1.6,
         onDone: (m) => { m.position.copy(land); scene.add(m); drops.push({ mesh: m, type: 'meat', pos: land, t: Math.random() * 6, claim: null }); },
@@ -892,6 +908,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     fx.burst(at.clone().setY(2), 0xffffff, 5, { speed: 2, up: 1, size: 0.1 });
     collectToBack(c, 'log', at);
     stats.logs++;
+    if (c === player.c && ++playerChops >= 3) learn('chop');
     if (t.hp <= 0) {
       t.alive = false;
       t.claim = null;
@@ -1039,60 +1056,82 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     return t ? new THREE.Vector3(t.x, 0, t.z) : null;
   };
 
+  // Tutorial = one tip per action, shown only until the player has done that action once.
+  // What's been learned is remembered on the device (kept across new games): after that we
+  // assume the player gets it, and the "?" How to play panel is there for questions.
+  const LEARNED_KEY = 'polarcamp-learned';
+  const learned = new Set();
+  if (useSave) { try { JSON.parse(localStorage.getItem(LEARNED_KEY) || '[]').forEach((k) => learned.add(k)); } catch { /* ignore */ } }
+  function learn(key) {
+    if (learned.has(key)) return;
+    learned.add(key);
+    goalT = 0; // switch the tip right away
+    if (useSave) { try { localStorage.setItem(LEARNED_KEY, JSON.stringify([...learned])); } catch { /* ignore */ } }
+  }
+  let playerChops = 0;
+
+  // Candidate tips in priority order; the first one not learned yet is shown.
+  // `info` tips (no action to perform) count as learned once they've been on screen a while.
   function computeGoal() {
     const P = player, c = P.c;
     if (P.dead) return null;
     const logs = countOf(c, 'log'), meat = countOf(c, 'meat'), steaks = countOf(c, 'steak');
+    const tips = [];
     const bear = bears.filter((b) => !b.dying).sort((a, b) => dist2d(a.pos, P.pos) - dist2d(b.pos, P.pos))[0];
-    if (bear && dist2d(bear.pos, P.pos) < 6) return { icon: '🐻', text: 'Bears! Stay close to hit them. Low HP? Run back under your towers.' };
+    if (bear && dist2d(bear.pos, P.pos) < 6) tips.push({ key: 'fight', icon: '🐻', text: 'Bears! Stay close to hit them. Low HP? Run back under your towers.' });
 
-    if (!counter.built) {
-      const z = zones.find((x) => x.def.id === 'counter');
-      const left = z.total - z.paid;
-      if (logs > 0 && (logs >= left || stackFree(c) <= 0)) return { icon: '🪵', text: 'Drop your wood on the SELL TABLE square', pos: padPos(z) };
-      return { icon: '🌲', text: `Walk next to a tree to chop it (wood: ${logs}/${left})`, pos: nearestTree() };
-    }
-    if (counter.pile.length) return { icon: '💵', text: 'Pick up your cash next to the sell table', pos: new THREE.Vector3(counter.pos.x + 1.5, 0, counter.pos.z + 0.3) };
-    if (meat && grill.built) return { icon: '🔥', text: 'Put raw meat on the GRILL: steaks sell for $12 instead of $5', pos: grill.pos.clone() };
-    if (grill.out > 0 && stackFree(c) > 0 && !helpers.some((h) => h.kind === 'cashier')) return { icon: '🍖', text: 'Grab the cooked steaks from the grill', pos: spots.grillOut() };
-    if (meat || steaks) return { icon: '🥩', text: 'Sell your meat at the SELL TABLE', pos: counter.pos.clone() };
+    // (once chopping is learned, the generic "Bring wood to the SELL TABLE square" tip below takes over)
+    if (!counter.built) tips.push({ key: 'chop', icon: '🌲', text: 'Walk next to a tree to chop it', pos: nearestTree() });
+    if (counter.pile.length) tips.push({ key: 'cash', icon: '💵', text: 'Pick up your cash next to the sell table', pos: new THREE.Vector3(counter.pos.x + 1.5, 0, counter.pos.z + 0.3) });
+    if (meat && grill.built) tips.push({ key: 'grill', icon: '🔥', text: 'Put raw meat on the GRILL: steaks sell for $12 instead of $5', pos: grill.pos.clone() });
+    if (grill.out > 0 && stackFree(c) > 0 && !helpers.some((h) => h.kind === 'cashier')) tips.push({ key: 'grillTake', icon: '🍖', text: 'Grab the cooked steaks from the grill', pos: spots.grillOut() });
+    if ((meat || steaks) && counter.built) tips.push({ key: 'sell', icon: '🥩', text: 'Sell your meat at the SELL TABLE', pos: counter.pos.clone() });
 
     const byLeft = (a, b) => (a.total - a.paid) - (b.total - b.paid);
     const cashPads = [...zones, ...upgrades].filter((z) => z.state === 'open' && z.currency === 'cash');
     const affordable = cashPads.filter((z) => cash >= z.total - z.paid).sort(byLeft)[0];
-    if (affordable) return { icon: '💵', text: `You can buy: ${padName(affordable)}. Stand on its square`, pos: padPos(affordable) };
+    if (affordable) tips.push({ key: 'buy', icon: '💵', text: `You can buy: ${padName(affordable)}. Stand on its square`, pos: padPos(affordable) });
 
     const openLog = zones.filter((z) => z.state === 'open' && z.currency === 'log');
     const logZone = openLog.find((z) => z.def.kind === 'grill') || openLog[0];
-    if (logZone && logs > 0) return { icon: '🪵', text: `Bring wood to the ${logZone.def.name} square`, pos: padPos(logZone) };
-    if (logZone && woodpile.count > 0) return { icon: '🪵', text: 'Grab wood from your wood storage', pos: woodpile.pos.clone() };
-    if (logZone) return { icon: '🌲', text: `Chop trees to build the ${logZone.def.name} (${logZone.total - logZone.paid} wood)`, pos: nearestTree() };
+    if (logZone && logs > 0) tips.push({ key: 'build', icon: '🪵', text: `Bring wood to the ${logZone.def.name} square`, pos: padPos(logZone) });
+    if (logZone && woodpile.count > 0) tips.push({ key: 'woodpile', icon: '🪵', text: 'Grab wood from your wood storage', pos: woodpile.pos.clone() });
+    if (counter.built && logs > logsNeeded()) tips.push({ key: 'spareWood', icon: '🪵', text: 'Spare wood? Sell it at the SELL TABLE for $1 each', pos: counter.pos.clone() });
 
     const next = cashPads.sort(byLeft)[0];
-    if (next) return { icon: '🐻', text: `Hunt bears for meat and sell it. Next: ${padName(next)} ($${next.total - next.paid})` };
-    return { icon: '🏆', text: 'Your camp is complete! Survive the waves.' };
+    if (next && counter.built) tips.push({ key: 'hunt', info: 10, icon: '🐻', text: `Hunt bears for meat and sell it to afford the ${padName(next)}` });
+    if (!next && !logZone) tips.push({ key: 'complete', info: 6, icon: '🏆', text: 'Your camp is complete! Survive the waves.' });
+
+    return tips.find((t) => !learned.has(t.key)) || null;
   }
 
-  // Small permanent labels explaining each station once it's built.
+  // Small labels on each station. The "what it does" line goes away once that action is learned.
   const stationLabels = [];
-  function stationLabel(html, getPos, visible = () => true) {
+  function stationLabel(html, getPos, visible, learnKey) {
     const el = document.createElement('div');
     el.className = 'label station-label';
     el.innerHTML = html;
     labelsEl.appendChild(el);
-    stationLabels.push({ el, getPos, visible });
+    stationLabels.push({ el, getPos, visible, learnKey });
   }
-  stationLabel('SELL TABLE<small>meat & spare wood → 💵</small>', () => counter.pos.clone().setY(2.6), () => counter.built);
-  stationLabel('💵 PICK UP', () => new THREE.Vector3(counter.pos.x + 1.5, 1.4, counter.pos.z + 0.3), () => counter.built && counter.pile.length > 0);
-  stationLabel('GRILL<small>raw meat → $12 steak</small>', () => grill.pos.clone().setY(2), () => grill.built);
-  stationLabel('WOOD STORAGE<small>your lumberjack fills it</small>', () => woodpile.pos.clone().setY(1.9), () => woodpile.built);
+  stationLabel('SELL TABLE<small>meat & spare wood → 💵</small>', () => counter.pos.clone().setY(2.6), () => counter.built, 'sell');
+  stationLabel('💵 PICK UP', () => new THREE.Vector3(counter.pos.x + 1.5, 1.4, counter.pos.z + 0.3), () => counter.built && counter.pile.length > 0 && !learned.has('cash'));
+  stationLabel('GRILL<small>raw meat → $12 steak</small>', () => grill.pos.clone().setY(2), () => grill.built, 'grill');
+  stationLabel('WOOD STORAGE<small>your lumberjack fills it</small>', () => woodpile.pos.clone().setY(1.9), () => woodpile.built, 'woodpile');
 
+  let infoShown = 0;
   function updateGuidance(dt) {
     goalT -= dt;
     if (goalT <= 0) {
       goalT = 0.25;
+      const prevKey = goal && goal.key;
       goal = computeGoal();
+      if (!goal || goal.key !== prevKey) infoShown = 0;
       hud.setHint(goal ? goal.text : '', goal ? goal.icon : '');
+    }
+    if (goal && goal.info) {
+      infoShown += dt;
+      if (infoShown > goal.info) learn(goal.key);
     }
     const target = goal && goal.pos;
     goalMarker.visible = !!target;
@@ -1114,6 +1153,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       const show = s.visible();
       s.el.style.display = show ? '' : 'none';
       if (!show) continue;
+      if (s.learnKey) s.el.classList.toggle('learned', learned.has(s.learnKey));
       const p = fx.toScreen(s.getPos());
       s.el.style.left = p.x + 'px'; s.el.style.top = p.y + 'px';
     }
