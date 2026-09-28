@@ -258,7 +258,9 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       obj = w.group;
       colliders.push(...w.colliders);
       wallColliders.push(...w.colliders);
-      walls.push({ side: d.wall, def: d, name: d.name, group: w.group, colliders: w.colliders, hp: WALL.hp, broken: false, pad: null, label: null, payT: 0 });
+      const wall = { side: d.wall, def: d, name: d.name, group: w.group, colliders: w.colliders, hp: WALL.hp, broken: false, pad: null, label: null, payT: 0 };
+      for (const c of w.colliders) c.wall = wall; // so a bear pushing against a collider knows which wall to chew
+      walls.push(wall);
     } else if (d.kind === 'grill') {
       obj = Models.makeGrill();
       obj.position.set(d.x, 0.12, d.z);
@@ -293,9 +295,11 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
   function damageWall(w, dmg) {
     if (w.broken) return;
     w.hp = Math.max(0, w.hp - dmg);
-    fx.burst(pointForWall(w.side).setY(1.2), 0xb57a3f, 10, { speed: 4, up: 4, size: 0.14 });
-    fx.addShake(0.1);
-    sfx.play(w.hp <= 0 ? 'crash' : 'crack', { at: pointForWall(w.side) });
+    if (dmg >= 5) {
+      fx.burst(pointForWall(w.side).setY(1.2), 0xb57a3f, 10, { speed: 4, up: 4, size: 0.14 });
+      fx.addShake(0.1);
+    }
+    sfx.play(w.hp <= 0 ? 'crash' : 'crack', { at: pointForWall(w.side), vol: dmg >= 5 ? 1 : 0.5 });
     if (w.hp <= 0) {
       // a breach: bears walk through until it's repaired
       w.broken = true;
@@ -898,7 +902,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     const maxArmor = def.armor ? Math.round(def.armor * hpMult) : 0;
     bears.push({
       obj, pos, def, kind, boss, hp: maxHp, maxHp, armor: maxArmor, maxArmor, armorBar,
-      attackT: def.attackRate, throwT: def.throwEvery || 0, bubbleT: 0,
+      attackT: def.attackRate, throwT: def.firstThrow ?? def.throwEvery ?? 0, bubbleT: 0,
       bar, flash: 0, lunge: 0, walkT: Math.random() * 6, dying: 0, vel: V(),
     });
   }
@@ -1010,9 +1014,9 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       const reach = b.def.radius + PLAYER.radius + 0.35;
       let moving = false;
       let faceX = P.pos.x, faceZ = P.pos.z;
-      // Log thrower: keeps its distance from the walls and lobs logs at them
-      // (or at you when there's no wall standing). Come close and it fights back.
-      const aim = b.kind === 'thrower' && !P.dead && dist > 5 ? throwerAim(b) : null;
+      // Log thrower: lobs logs from range at the closest target (a standing wall or you);
+      // it only comes to bite when you're right next to it.
+      const aim = b.kind === 'thrower' && !P.dead && dist > reach + 0.3 ? throwerAim(b) : null;
       if (aim) {
         const dA = dist2d(b.pos, aim.point);
         faceX = aim.point.x; faceZ = aim.point.z;
@@ -1048,6 +1052,23 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       resolve(b.pos, b.def.radius, false);
       if (Math.hypot(faceX - b.pos.x, faceZ - b.pos.z) > 0.01) b.obj.rotation.y = lerpAngle(b.obj.rotation.y, Math.atan2(faceX - b.pos.x, faceZ - b.pos.z), Math.min(1, dt * 8));
 
+      // Blocked by a wall on the way to you? It chews on it (small damage, bosses hit harder):
+      // fences wear down and cost wood to keep up.
+      if (!P.dead && dist > reach + 0.1 && moving) {
+        const chew = wallColliders.find((c) => {
+          const x = THREE.MathUtils.clamp(b.pos.x, c.minX, c.maxX), z = THREE.MathUtils.clamp(b.pos.z, c.minZ, c.maxZ);
+          return Math.hypot(b.pos.x - x, b.pos.z - z) < b.def.radius + 0.12;
+        });
+        if (chew) {
+          b.wallT = (b.wallT ?? b.def.attackRate) - dt;
+          if (b.wallT <= 0) {
+            b.wallT = b.def.attackRate * 1.4;
+            b.lunge = 1;
+            damageWall(chew.wall, b.def.wallHit || 1);
+          }
+        }
+      }
+
       if (!P.dead && dist <= reach + 0.1) {
         b.attackT -= dt;
         if (b.attackT <= 0) {
@@ -1073,15 +1094,22 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
         b.armorBar.position.set(b.pos.x, 2 * b.def.scale + 0.18, b.pos.z);
         b.armorBar.quaternion.copy(camera.quaternion);
       }
-      if (b.obj.userData.heldLog) b.obj.userData.heldLog.visible = b.throwT > 0.8; // log leaves its paws when thrown
+      const held = b.obj.userData.heldLog;
+      if (held) {
+        // the log leaves its paws when thrown, comes back, and is raised overhead right before the next throw
+        held.visible = b.throwT < b.def.throwEvery - 0.5;
+        const windup = Math.max(0, 1 - b.throwT / 0.7);
+        held.position.y = 1.15 + windup * 0.9;
+        held.position.z = 0.65 - windup * 0.5;
+      }
     }
     updateThrown(dt);
     updateClouds(dt);
   }
 
-  // Closest point on a standing wall (or the player if no wall is up).
+  // Closest target: you, or the closest point of a standing wall.
   function throwerAim(b) {
-    let best = null, bestD = Infinity;
+    let best = { point: player.pos.clone(), wall: null }, bestD = dist2d(b.pos, player.pos);
     for (const w of walls) {
       if (w.broken) continue;
       for (const c of w.colliders) {
@@ -1091,7 +1119,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
         if (d < bestD) { bestD = d; best = { point: new THREE.Vector3(x, 0, z), wall: w }; }
       }
     }
-    return best || { point: player.pos.clone(), wall: null };
+    return best;
   }
 
   function throwLog(b, aim) {
@@ -1314,16 +1342,18 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
   }
 
   // ---------- Trees ----------
-  function hitTree(t, c) {
+  // `power` = logs cut per hit (the player's axe level raises it: max level one-shots a tree)
+  function hitTree(t, c, power = 1) {
     if (!t.alive || stackFree(c) <= 0) return;
-    t.hp--;
+    const logs = Math.min(power, t.hp, stackFree(c));
+    t.hp -= logs;
     t.shake = 0.25;
     const at = new THREE.Vector3(t.x, 1, t.z);
-    fx.burst(at, 0xd09a5e, 5, { speed: 3, up: 3, size: 0.1 });
+    fx.burst(at, 0xd09a5e, 5 * logs, { speed: 3, up: 3, size: 0.1 });
     fx.burst(at.clone().setY(2), 0xffffff, 5, { speed: 2, up: 1, size: 0.1 });
-    collectToBack(c, 'log', at);
+    for (let i = 0; i < logs; i++) collectToBack(c, 'log', at.clone().setY(1 + i * 0.3));
     sfx.play('chop', { at, vol: c === player.c ? 1 : 0.5 });
-    stats.logs++;
+    stats.logs += logs;
     if (c === player.c && ++playerChops >= 3) learn('chop');
     if (t.hp <= 0) {
       t.alive = false;
@@ -1406,6 +1436,8 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     const nearestBear = bears.filter((b) => !b.dying).sort((a, b) => a.pos.distanceTo(p) - b.pos.distanceTo(p))[0];
     const bearDist = nearestBear ? nearestBear.pos.distanceTo(p) : Infinity;
     // hurt: fall back under the towers until healed
+    // poison never wears off: the campfire comes before everything else
+    if (player.poisonT > 0) return CAMPFIRE.clone();
     if (player.hp < PLAYER.maxHp * 0.45 && bearDist < 7) return new THREE.Vector3(0, 0, 2.5);
     if (bearDist < 5) return nearestBear.pos;
     // the log thrower stays out of tower range: go get it
@@ -1435,7 +1467,6 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     }
     const hurtWall = walls.find((w) => w.pad);
     if (hurtWall && countOf(c, 'log') >= 3) return new THREE.Vector3(hurtWall.def.x, 0, hurtWall.def.z);
-    if (player.poisonT > 0) return CAMPFIRE.clone();
     if (logs && logZone && (full || logs >= logZone.total - logZone.paid || (woodpile.count === 0 && logs >= 10))) return new THREE.Vector3(logZone.def.x, 0, logZone.def.z);
     if (cashZone && cash >= Math.min(20, cashZone.total - cashZone.paid)) return new THREE.Vector3(cashZone.def.x, 0, cashZone.def.z);
     if (grill.out > 0 && !full && !helpers.some((h) => h.kind === 'cashier')) return spots.grillOut();
@@ -1536,7 +1567,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     const bear = bears.filter((b) => !b.dying).sort((a, b) => dist2d(a.pos, P.pos) - dist2d(b.pos, P.pos))[0];
 
     // --- boss moments first: each one explained the first time it happens ---
-    if (P.poisonT > 0) tips.push({ key: 'campfire', icon: '☠️', text: 'Poisoned! Stand by the campfire to cure it (it heals you too)', pos: CAMPFIRE.clone() });
+    if (P.poisonT > 0) tips.push({ key: 'campfire', icon: '☠️', text: "Poisoned! It won't stop until you reach the campfire: run!", pos: CAMPFIRE.clone() });
     if (clouds.some((cl) => !cl.burst)) tips.push({ key: 'cloud', info: 3, icon: '💨', text: 'The poison bear is about to burst: step back!' });
     const alive = (kind) => bears.find((b) => b.kind === kind && !b.dying);
     const armored = alive('armored');
@@ -1878,7 +1909,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       fx.addShake(0.08);
       return;
     }
-    hitTree(target, player.c);
+    hitTree(target, player.c, PLAYER.chopPower(levels.axe));
   }
 
   function retry() {

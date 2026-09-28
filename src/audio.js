@@ -16,6 +16,10 @@ export function createAudio() {
   try { muted = localStorage.getItem(MUTE_KEY) === '1'; } catch { /* ignore */ }
   const last = {};
   const listener = { x: 0, z: 0 };
+  // Capture mode (offline filming): sounds are logged with their game time instead of
+  // played, then rendered all at once into a WAV by renderCapture().
+  let capture = null, captureTime = 0;
+  let tBase = null; // when set, sounds are scheduled at this time (offline rendering)
 
   function init() {
     if (ctx) return;
@@ -41,7 +45,7 @@ export function createAudio() {
   }
 
   function tone({ freq = 440, to = null, type = 'sine', vol = 0.3, dur = 0.15, attack = 0.005, delay = 0, gain = 1 }) {
-    const t = ctx.currentTime + delay;
+    const t = (tBase ?? ctx.currentTime) + delay;
     const o = ctx.createOscillator(), g = ctx.createGain();
     o.type = type;
     o.frequency.setValueAtTime(freq, t);
@@ -52,7 +56,7 @@ export function createAudio() {
   }
 
   function noise({ filter = 'bandpass', freq = 1000, to = null, q = 1, vol = 0.3, dur = 0.15, attack = 0.003, delay = 0, gain = 1 }) {
-    const t = ctx.currentTime + delay;
+    const t = (tBase ?? ctx.currentTime) + delay;
     const s = ctx.createBufferSource(); s.buffer = noiseBuf;
     const f = ctx.createBiquadFilter(); f.type = filter; f.Q.value = q;
     f.frequency.setValueAtTime(freq, t);
@@ -112,10 +116,13 @@ export function createAudio() {
     names: () => Object.keys(SOUNDS),
     // opts.force: build the sound even if the browser hasn't allowed audio yet (tests)
     play(name, opts = {}) {
-      if (opts.force) init();
-      if (muted || !ctx || (ctx.state !== 'running' && !opts.force) || !SOUNDS[name]) return;
-      const now = ctx.currentTime;
-      if (THROTTLE[name] && last[name] && now - last[name] < THROTTLE[name]) return;
+      if (!SOUNDS[name]) return;
+      if (!capture) {
+        if (opts.force) init();
+        if (muted || !ctx || (ctx.state !== 'running' && !opts.force)) return;
+      }
+      const now = capture ? captureTime : ctx.currentTime;
+      if (THROTTLE[name] && last[name] !== undefined && now - last[name] >= 0 && now - last[name] < THROTTLE[name]) return;
       let k = opts.vol ?? 1;
       if (opts.at) {
         const d = Math.hypot(opts.at.x - listener.x, opts.at.z - listener.z);
@@ -123,7 +130,39 @@ export function createAudio() {
         if (k < 0.04) return;
       }
       last[name] = now;
-      SOUNDS[name](k);
+      if (capture) capture.push({ name, t: now, k });
+      else SOUNDS[name](k);
+    },
+
+    // --- offline filming ---
+    startCapture() { capture = []; captureTime = 0; for (const n in last) delete last[n]; },
+    setCaptureTime(t) { captureTime = t; },
+    // Renders every captured sound into a 16-bit stereo WAV (ArrayBuffer), same synthesis as live.
+    async renderCapture(duration) {
+      const events = capture || [];
+      capture = null;
+      for (const n in last) delete last[n];
+      const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+      const sr = 48000;
+      const off = new OAC(2, Math.ceil(duration * sr), sr);
+      const saved = { ctx, master, noiseBuf };
+      ctx = off;
+      const comp = off.createDynamicsCompressor();
+      comp.threshold.value = -18; comp.ratio.value = 4;
+      master = off.createGain();
+      master.gain.value = 0.55;
+      master.connect(comp).connect(off.destination);
+      noiseBuf = off.createBuffer(1, sr, sr);
+      const nd = noiseBuf.getChannelData(0);
+      for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
+      try {
+        for (const e of events) { if (e.t < duration) { tBase = e.t; SOUNDS[e.name](e.k); } }
+      } finally {
+        tBase = null;
+        ({ ctx, master, noiseBuf } = saved);
+      }
+      const buf = await off.startRendering();
+      return { wav: toWav(buf), events: events.length };
     },
     get muted() { return muted; },
     setMuted(v) {
@@ -132,4 +171,26 @@ export function createAudio() {
       if (master) master.gain.value = v ? 0 : 0.55;
     },
   };
+}
+
+// AudioBuffer → 16-bit PCM WAV
+function toWav(buf) {
+  const ch = buf.numberOfChannels, len = buf.length, sr = buf.sampleRate;
+  const out = new DataView(new ArrayBuffer(44 + len * ch * 2));
+  const str = (o, s) => { for (let i = 0; i < s.length; i++) out.setUint8(o + i, s.charCodeAt(i)); };
+  str(0, 'RIFF'); out.setUint32(4, 36 + len * ch * 2, true); str(8, 'WAVE');
+  str(12, 'fmt '); out.setUint32(16, 16, true); out.setUint16(20, 1, true); out.setUint16(22, ch, true);
+  out.setUint32(24, sr, true); out.setUint32(28, sr * ch * 2, true); out.setUint16(32, ch * 2, true); out.setUint16(34, 16, true);
+  str(36, 'data'); out.setUint32(40, len * ch * 2, true);
+  const data = [];
+  for (let c = 0; c < ch; c++) data.push(buf.getChannelData(c));
+  let o = 44;
+  for (let i = 0; i < len; i++) {
+    for (let c = 0; c < ch; c++) {
+      const v = Math.max(-1, Math.min(1, data[c][i]));
+      out.setInt16(o, v < 0 ? v * 0x8000 : v * 0x7fff, true);
+      o += 2;
+    }
+  }
+  return out.buffer;
 }

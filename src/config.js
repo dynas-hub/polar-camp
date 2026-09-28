@@ -16,6 +16,8 @@ export const PLAYER = {
   bagPerLevel: 6,
   baseDamage: 1,
   damagePerLevel: 1,
+  // logs per axe hit on a tree: 1, then 2 from AXE LV5 (level 4), 3 from LV9 = one-shot trees
+  chopPower: (axeLevel) => Math.min(3, 1 + Math.floor(axeLevel / 4)),
 };
 
 export const TREE = {
@@ -28,30 +30,33 @@ export const TREE = {
   spacing: 1.9,
 };
 
+// wallHit: damage per swing to a wall that's in the way (bears chew through fences → repairs cost wood)
 export const BEAR = {
-  hp: 3, speed: 3.1, damage: 1, attackRate: 1, radius: 0.6, meat: 3, scale: 1,
+  hp: 3, speed: 3.1, damage: 1, attackRate: 1, radius: 0.6, meat: 3, scale: 1, wallHit: 1,
 };
 
 // Bosses: one every 5 waves. `cash` = loot bag dropped on death.
 // Tuned to add a challenge without being unfair: every boss can be beaten with the axe
 // alone at low upgrade levels, and the towers help against all of them except armor.
 export const BOSSES = {
-  mega: { name: 'MEGA BEAR', hp: 28, speed: 2.5, damage: 4, attackRate: 1.3, radius: 1.05, meat: 8, scale: 1.8, cash: 25 },
+  mega: { name: 'MEGA BEAR', hp: 40, speed: 2.5, damage: 4, attackRate: 1.3, radius: 1.05, meat: 8, scale: 1.8, cash: 25, wallHit: 6 },
   // arrows bounce off the plates; the axe breaks them (armor points first, then hp)
-  armored: { name: 'ARMORED BEAR', hp: 22, armor: 15, plates: 3, plateDrops: 2, speed: 2.3, damage: 3, attackRate: 1.35, radius: 1.0, meat: 6, scale: 1.7, cash: 40 },
+  armored: { name: 'ARMORED BEAR', hp: 32, armor: 24, plates: 3, plateDrops: 2, speed: 2.3, damage: 3, attackRate: 1.35, radius: 1.0, meat: 6, scale: 1.7, cash: 40, wallHit: 6 },
   // bite poisons (see POISON); bursts into a poison cloud on death; drops toxic meat
-  poison: { name: 'POISON BEAR', hp: 20, speed: 3.2, damage: 2, attackRate: 1.2, radius: 0.85, meat: 0, toxic: 5, scale: 1.45, cash: 40 },
-  // keeps its distance and throws logs at the walls (or at you when there are none)
-  thrower: { name: 'LOG THROWER', hp: 24, speed: 2.6, damage: 2, attackRate: 1.2, radius: 0.9, meat: 6, scale: 1.5, cash: 50,
-    range: 9, throwEvery: 3.6, wallDamage: 12, hitDamage: 2, heartwood: 1 },
+  poison: { name: 'POISON BEAR', hp: 30, speed: 3.2, damage: 2, attackRate: 1.2, radius: 0.85, meat: 0, toxic: 5, scale: 1.45, cash: 40, wallHit: 4 },
+  // keeps its distance and lobs logs at the closest target: a wall or you
+  thrower: { name: 'LOG THROWER', hp: 34, speed: 2.6, damage: 2, attackRate: 1.2, radius: 0.9, meat: 6, scale: 1.5, cash: 50, wallHit: 4,
+    // 25 per log: a 100 hp wall falls in 4 logs (~11 s) if nobody goes out to stop it
+    range: 9, throwEvery: 2.8, firstThrow: 1.2, wallDamage: 25, hitDamage: 3, heartwood: 1 },
 };
 export const BOSS_ORDER = ['mega', 'armored', 'poison', 'thrower'];
 
-// Short on purpose: poison is a nudge to walk to the campfire, never a death sentence.
+// Poison never wears off: it keeps ticking until you die or reach the campfire
+// (1 hp/s with 20 hp = about 20 s to get there).
 export const POISON = {
   dps: 1,            // damage per second while poisoned (ignores armor)
-  bite: 4,           // seconds of poison per bite (refreshes, doesn't stack)
-  cloud: 3,          // seconds of poison from the death cloud
+  bite: Infinity,    // a bite poisons you until you're cured at the campfire
+  cloud: Infinity,   // so does the death cloud
   cloudRadius: 2.8,
   cloudDelay: 0.9,   // warning time before the cloud bursts
   campfireRadius: 1.9,
@@ -67,21 +72,21 @@ export const WAVES = {
   firstDelay: 30,
   interval: 26,
   spawnRadius: 30,
-  // capped so late waves stay smooth on phones; bears get tougher instead
+  // capped so late waves stay smooth on phones; bears get tougher every wave instead (+8%/wave)
   countFor: (n) => Math.min(20, 1 + n),
-  hpScale: (n) => 1 + Math.max(0, n - 20) * 0.05,
+  hpScale: (n) => 1 + (n - 1) * 0.08,
   spawnGap: 0.7,
-  // Waves 5-20 introduce one boss at a time, then they rotate alone (25-40),
-  // come as a pair of the same class (45-60), then two different classes (65+).
+  // A boss every 3 waves. Waves 3-12 introduce them one at a time, then they rotate alone
+  // (15-24), come as a pair of the same class (27-36), then two different classes (39+).
   bossesFor(n) {
-    if (n % 5) return [];
-    const k = n / 5, O = BOSS_ORDER;
+    if (n % 3) return [];
+    const k = n / 3, O = BOSS_ORDER;
     if (k <= 8) return [O[(k - 1) % 4]];
     if (k <= 12) return [O[(k - 1) % 4], O[(k - 1) % 4]];
     return [O[(k - 1) % 4], O[k % 4]];
   },
-  // bosses coming back after their debut get a bit tougher each lap (+15%)
-  bossScale: (n) => 1 + Math.max(0, Math.floor(n / 5) - 4) * 0.15 / 4,
+  // bosses scale with the wave: ×1.0 at wave 3, ×1.6 at wave 9, ×2.2 at wave 15, ×3.1 at wave 24
+  bossScale: (n) => 0.7 + n * 0.1,
 };
 
 export const TOWER = { range: 8, fireRate: 0.8, damage: 1, arrowSpeed: 22 };

@@ -208,8 +208,12 @@ requestAnimationFrame(frame);
 // (3D + HUD) as a JPEG. Doesn't depend on the tab being visible or on machine speed.
 // tools/film.ps1 <name> then turns devlog/frames/<name> into devlog/clips/<name>.mp4
 // opts.speed: game steps per frame (timelapse) · opts.overview: fixed high camera over the camp
+// Sound: at normal speed every sound effect is logged with its time, rendered into a WAV
+// at the end and saved next to the frames (film.ps1 muxes it). Timelapses stay silent.
 async function film(name, seconds, opts = {}) {
   const { fps = 30, speed = 1, overview = false } = opts;
+  const withSound = opts.sound ?? speed === 1;
+  if (withSound) sfx.startCapture();
   filming = true;
   started = true;
   overviewCam = overview;
@@ -224,11 +228,17 @@ async function film(name, seconds, opts = {}) {
     for (let i = 0; i < total; i += BATCH) {
       const urls = [];
       for (let j = i; j < Math.min(total, i + BATCH); j++) {
+        if (withSound) sfx.setCaptureTime(j / fps);
         step(1 / fps);
         renderer.render(scene, camera);
         urls.push(recorder.compose().toDataURL('image/jpeg', 0.9));
       }
       await fetch(`/__frames?name=${encodeURIComponent(name)}&start=${i}`, { method: 'POST', body: urls.join('\n') });
+    }
+    if (withSound) {
+      const { wav, events } = await sfx.renderCapture(total / fps);
+      await fetch(`/__audio?name=${encodeURIComponent(name)}`, { method: 'POST', body: wav });
+      opts.soundEvents = events;
     }
   } finally {
     filming = false;
@@ -236,7 +246,7 @@ async function film(name, seconds, opts = {}) {
     scene.fog.near = 26; scene.fog.far = 55;
     last = performance.now();
   }
-  return { name, frames: total, size: `${canvas.width}x${canvas.height}` };
+  return { name, frames: total, size: `${canvas.width}x${canvas.height}`, sounds: opts.soundEvents ?? 0 };
 }
 
 // Dev hooks (console / automation): PC.snap('name'), PC.rec.start('name'), PC.rec.stop(), PC.game.auto.on = true
