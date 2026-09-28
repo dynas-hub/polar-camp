@@ -39,7 +39,7 @@ export const BEAR = {
   hp: 3, speed: 3.1, damage: 1, attackRate: 1, radius: 0.6, meat: 3, scale: 1, wallHit: 1,
 };
 
-// Bosses: one every 5 waves. `cash` = loot bag dropped on death.
+// Bosses: one every 3 waves (see WAVES.bossesFor). `cash` = loot bag dropped on death.
 // Tuned to add a challenge without being unfair: every boss can be beaten with the axe
 // alone at low upgrade levels, and the towers help against all of them except armor.
 export const BOSSES = {
@@ -54,7 +54,8 @@ export const BOSSES = {
     // 25 per log: a 100 hp wall falls in 4 logs (~11 s) if nobody goes out to stop it
     range: 9, throwEvery: 2.8, firstThrow: 1.2, wallDamage: 25, hitDamage: 3, heartwood: 1 },
 };
-export const BOSS_ORDER = ['mega', 'armored', 'poison', 'thrower'];
+// the log thrower comes before the poison bear: its heartwood makes the ballista that the poison vial upgrades
+export const BOSS_ORDER = ['mega', 'armored', 'thrower', 'poison'];
 
 // Poison never wears off: it keeps ticking until you die or reach the campfire
 // (1 hp/s with 20 hp = about 20 s to get there).
@@ -83,9 +84,10 @@ export const WAVES = {
   firstDelay: 30,
   interval: 26,
   spawnRadius: 30,
-  // capped so late waves stay smooth on phones; bears get tougher every wave instead (+8%/wave)
+  // capped so late waves stay smooth on phones; bears get tougher every wave instead:
+  // +8% hp per wave, compounding (same rhythm as the axe's +12% per level): ×2 at wave 10, ×4.3 at 20, ×9.3 at 30
   countFor: (n) => Math.min(20, 1 + n),
-  hpScale: (n) => 1 + (n - 1) * 0.08,
+  hpScale: (n) => Math.pow(1.08, n - 1),
   spawnGap: 0.7,
   // A boss every 3 waves. Waves 3-12 introduce them one at a time, then they rotate alone
   // (15-24), come as a pair of the same class (27-36), then two different classes (39+).
@@ -96,8 +98,8 @@ export const WAVES = {
     if (k <= 12) return [O[(k - 1) % 4], O[(k - 1) % 4]];
     return [O[(k - 1) % 4], O[k % 4]];
   },
-  // bosses scale with the wave: ×1.0 at wave 3, ×1.6 at wave 9, ×2.2 at wave 15, ×3.1 at wave 24
-  bossScale: (n) => 0.7 + n * 0.1,
+  // bosses scale with the wave, +8% compounding too: ×1.0 at wave 3, ×1.6 at wave 9, ×2.5 at wave 15, ×5 at wave 24
+  bossScale: (n) => Math.pow(1.08, n - 3),
 };
 
 export const TOWER = { range: 8, fireRate: 0.8, damage: 1, arrowSpeed: 22 };
@@ -136,7 +138,7 @@ export const HELPERS = {
 };
 
 // Where logs from hired lumberjacks are dropped. The player picks them up from here.
-export const WOODPILE = { x: -1.7, z: -2.6 };
+export const WOODPILE = { x: -2.6, z: -2.6 };
 
 // The camp expansion (annex) sits behind the south wall: x -6..6, z 6..ANNEX_END.
 export const ANNEX_END = 14;
@@ -157,31 +159,31 @@ export const WALLS = {
 // kind: what gets built. cost: { logs } or { cash }. x/z is the pad position;
 // walls are built along the camp edge named by `wall` (N has a gate in the middle).
 export const ZONES = [
-  { id: 'counter', kind: 'counter', name: 'SELL TABLE', x: 2.6, z: 2.4, cost: { logs: 8 } },
-  { id: 'wallN', kind: 'wall', name: 'NORTH WALL', x: 0, z: -4.2, cost: { logs: 18 }, requires: ['counter'], wall: 'N' },
-  { id: 'tower1', kind: 'tower', name: 'ARROW TOWER', x: -3.8, z: -3.6, cost: { cash: 20 }, requires: ['counter'] },
-  { id: 'wallW', kind: 'wall', name: 'WEST WALL', x: -4.4, z: -1.2, cost: { logs: 22 }, requires: ['wallN'], wall: 'W' },
-  { id: 'wallE', kind: 'wall', name: 'EAST WALL', x: 4.4, z: -1.2, cost: { logs: 22 }, requires: ['wallN'], wall: 'E' },
-  { id: 'tower2', kind: 'tower', name: 'ARROW TOWER', x: 3.8, z: -3.6, cost: { cash: 60 }, requires: ['tower1'] },
-  { id: 'tower3', kind: 'tower', name: 'ARROW TOWER', x: -3.8, z: 3.8, cost: { cash: 120 }, requires: ['tower2', 'wallW'] },
+  { id: 'counter', kind: 'counter', name: 'SELL TABLE', x: 2.4, z: 1.8, cost: { logs: 8 } },
+  { id: 'wallN', kind: 'wall', name: 'NORTH WALL', x: -2.4, z: -4.9, cost: { logs: 18 }, requires: ['counter'], wall: 'N' },
+  { id: 'tower1', kind: 'tower', name: 'ARROW TOWER', x: -4.7, z: -4.7, cost: { cash: 20 }, requires: ['counter'] },
+  { id: 'wallW', kind: 'wall', name: 'WEST WALL', x: -4.8, z: -1.8, cost: { logs: 22 }, requires: ['wallN'], wall: 'W' },
+  { id: 'wallE', kind: 'wall', name: 'EAST WALL', x: 4.8, z: -1.8, cost: { logs: 22 }, requires: ['wallN'], wall: 'E' },
+  { id: 'tower2', kind: 'tower', name: 'ARROW TOWER', x: 4.7, z: -4.7, cost: { cash: 60 }, requires: ['tower1'] },
+  { id: 'tower3', kind: 'tower', name: 'ARROW TOWER', x: -4.7, z: 4.7, cost: { cash: 120 }, requires: ['tower2', 'wallW'] },
   // v0.2: cooking + automation chain (lumberjack → woodpile, hunter → grill, cashier → counter)
-  { id: 'grill', kind: 'grill', name: 'GRILL', x: 1.8, z: -2.2, cost: { logs: 25 }, requires: ['counter'] },
-  { id: 'hireLumber', kind: 'hire', helper: 'lumberjack', name: 'HIRE LUMBERJACK', x: 4.4, z: 4.6, cost: { cash: 60 }, requires: ['counter'] },
-  { id: 'hireCarrier', kind: 'hire', helper: 'carrier', name: 'HIRE HUNTER', x: -4.4, z: 1.7, cost: { cash: 120 }, requires: ['grill'] },
-  { id: 'hireCashier', kind: 'hire', helper: 'cashier', name: 'HIRE CASHIER', x: 2.2, z: 0.2, cost: { cash: 200 }, requires: ['grill', 'hireCarrier'] },
+  { id: 'grill', kind: 'grill', name: 'GRILL', x: 2.5, z: -2.4, cost: { logs: 25 }, requires: ['counter'] },
+  { id: 'hireLumber', kind: 'hire', helper: 'lumberjack', name: 'HIRE LUMBERJACK', x: 2.4, z: -4.9, cost: { cash: 60 }, requires: ['counter'] },
+  { id: 'hireCarrier', kind: 'hire', helper: 'carrier', name: 'HIRE HUNTER', x: -4.8, z: 0.6, cost: { cash: 120 }, requires: ['grill'] },
+  { id: 'hireCashier', kind: 'hire', helper: 'cashier', name: 'HIRE CASHIER', x: 4.8, z: 0.4, cost: { cash: 200 }, requires: ['grill', 'hireCarrier'] },
   // v0.4: close the 4th side (gate in the middle), then expand the camp to the south
-  { id: 'wallS', kind: 'wall', name: 'SOUTH WALL', x: -2.4, z: 7.4, cost: { logs: 22 }, requires: ['wallN'], wall: 'S' },
-  { id: 'expandWood', kind: 'milestone', name: 'EXPANSION: FOUNDATIONS', x: 3.2, z: 7.6, cost: { logs: 60 }, requires: ['wallS'] },
-  { id: 'expand', kind: 'expand', name: 'EXPAND THE CAMP', x: 3.2, z: 7.6, cost: { cash: 500 }, requires: ['expandWood'] },
+  { id: 'wallS', kind: 'wall', name: 'SOUTH WALL', x: -2.4, z: 2.6, cost: { logs: 22 }, requires: ['wallN'], wall: 'S' },
+  { id: 'expandWood', kind: 'milestone', name: 'EXPANSION: FOUNDATIONS', x: 2.6, z: 7.8, cost: { logs: 60 }, requires: ['wallS'] },
+  { id: 'expand', kind: 'expand', name: 'EXPAND THE CAMP', x: 2.6, z: 7.8, cost: { cash: 500 }, requires: ['expandWood'] },
   // the annex: its own walls, 2 more workers, a smokehouse and 2 more tower spots
-  { id: 'wallAW', kind: 'wall', name: 'ANNEX WEST WALL', x: -4.5, z: 7.6, cost: { logs: 22 }, requires: ['expand'], wall: 'AW' },
-  { id: 'wallAE', kind: 'wall', name: 'ANNEX EAST WALL', x: 4.5, z: 7.6, cost: { logs: 22 }, requires: ['expand'], wall: 'AE' },
-  { id: 'wallAS', kind: 'wall', name: 'ANNEX SOUTH WALL', x: -2.2, z: 12.6, cost: { logs: 26 }, requires: ['expand'], wall: 'AS' },
-  { id: 'smoker', kind: 'smoker', name: 'SMOKEHOUSE', x: 2.2, z: 10.2, cost: { logs: 40 }, requires: ['expand'] },
-  { id: 'hireLumber2', kind: 'hire', helper: 'lumberjack', name: 'HIRE LUMBERJACK', x: -4.5, z: 10.2, cost: { cash: 250 }, requires: ['expand'] },
-  { id: 'hireCarrier2', kind: 'hire', helper: 'carrier', name: 'HIRE HUNTER', x: 4.5, z: 10.2, cost: { cash: 300 }, requires: ['smoker'] },
-  { id: 'tower4', kind: 'tower', name: 'ARROW TOWER', x: -4.6, z: 12.8, cost: { cash: 200 }, requires: ['expand'] },
-  { id: 'tower5', kind: 'tower', name: 'ARROW TOWER', x: 4.6, z: 12.8, cost: { cash: 300 }, requires: ['tower4'] },
+  { id: 'wallAW', kind: 'wall', name: 'ANNEX WEST WALL', x: -4.8, z: 7.6, cost: { logs: 22 }, requires: ['expand'], wall: 'AW' },
+  { id: 'wallAE', kind: 'wall', name: 'ANNEX EAST WALL', x: 4.8, z: 7.6, cost: { logs: 22 }, requires: ['expand'], wall: 'AE' },
+  { id: 'wallAS', kind: 'wall', name: 'ANNEX SOUTH WALL', x: -2.4, z: 12.6, cost: { logs: 26 }, requires: ['expand'], wall: 'AS' },
+  { id: 'smoker', kind: 'smoker', name: 'SMOKEHOUSE', x: 2.6, z: 10.0, cost: { logs: 40 }, requires: ['expand'] },
+  { id: 'hireLumber2', kind: 'hire', helper: 'lumberjack', name: 'HIRE LUMBERJACK', x: -4.8, z: 9.8, cost: { cash: 250 }, requires: ['expand'] },
+  { id: 'hireCarrier2', kind: 'hire', helper: 'carrier', name: 'HIRE HUNTER', x: 4.8, z: 9.8, cost: { cash: 300 }, requires: ['smoker'] },
+  { id: 'tower4', kind: 'tower', name: 'ARROW TOWER', x: -4.7, z: 12.7, cost: { cash: 200 }, requires: ['expand'] },
+  { id: 'tower5', kind: 'tower', name: 'ARROW TOWER', x: 4.7, z: 12.7, cost: { cash: 300 }, requires: ['tower4'] },
 ];
 
 // Repeatable upgrade pads: cost grows each level (incremental progression).
@@ -191,7 +193,7 @@ export const ZONES = [
 // selling speeds up), armor +4 points. Costs grow slowly (10-15% per level) so that about one
 // level per wave stays affordable: upgrades keep pace with the bears (+8% hp per wave).
 export const UPGRADES = [
-  { id: 'axe', name: 'AXE', icon: '🪓', x: -2.2, z: 4.5, base: 15, growth: 1.1, max: Infinity, requires: ['counter'] },
-  { id: 'bag', name: 'BAG', icon: '🎒', x: -0.25, z: 4.5, base: 12, growth: 1.12, max: Infinity, requires: ['counter'] },
-  { id: 'armor', name: 'ARMOR', icon: '🛡️', x: 1.7, z: 4.5, base: 2, growth: 1.15, max: Infinity, currency: 'plate', requires: ['firstPlate'] },
+  { id: 'axe', name: 'AXE', icon: '🪓', x: -2.4, z: 4.8, base: 15, growth: 1.1, max: Infinity, requires: ['counter'] },
+  { id: 'bag', name: 'BAG', icon: '🎒', x: 2.4, z: 4.8, base: 12, growth: 1.12, max: Infinity, requires: ['counter'] },
+  { id: 'armor', name: 'ARMOR', icon: '🛡️', x: 4.6, z: 4.8, base: 2, growth: 1.15, max: Infinity, currency: 'plate', requires: ['firstPlate'] },
 ];

@@ -182,8 +182,9 @@ function placeCamera(dt) {
   if (overviewCam) {
     // fixed high shot of the whole camp (timelapses)
     const portrait = camera.aspect < 1;
-    camera.position.set(0, portrait ? 27 : 24, portrait ? 17.5 : 17);
-    camera.lookAt(0, 0, portrait ? 0.8 : 0.5);
+    const o = typeof overviewCam === 'object' ? overviewCam : null; // custom framing: { y, z, look }
+    camera.position.set(0, o?.y ?? (portrait ? 27 : 24), o?.z ?? (portrait ? 17.5 : 17));
+    camera.lookAt(0, 0, o?.look ?? (portrait ? 0.8 : 0.5));
   } else {
     camera.position.copy(focus).addScaledVector(CAM_OFFSET, camDist);
     camera.position.x += s.x; camera.position.y += s.y;
@@ -255,6 +256,7 @@ async function film(name, seconds, opts = {}) {
 // PC.sim(seconds) fast-forwards the game logic without rendering (works in background tabs).
 window.PC = {
   game, recorder, rec: recorder, snap: recorder.snap, renderer, scene, camera, film, sfx,
+  overview(on = true) { overviewCam = on; placeCamera(1); game.update(0); }, // top shot of the camp (layout checks)
   sim(seconds, step = 1 / 30) {
     started = true;
     for (let t = 0; t < seconds; t += step) {

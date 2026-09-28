@@ -57,9 +57,9 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
   campfire.userData.flames.forEach((f) => { f.material = f.material.clone(); f.material.transparent = true; });
 
   const tent = Models.makeTent();
-  tent.position.set(-2.4, 0.12, 0.9);
+  tent.position.set(-2.6, 0.12, 0.3);
   scene.add(tent);
-  addBox(-2.4, 0.9, 0.95, 0.95);
+  addBox(-2.6, 0.3, 0.95, 0.95);
 
   const rand = rng(7);
   const trees = [];
@@ -391,7 +391,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       const s = fx.toScreen(new THREE.Vector3(w.def.x, 0.2, w.def.z + 0.2));
       w.label.style.left = s.x + 'px'; w.label.style.top = s.y + 'px';
       // standing on it with wood: one log = +10 hp
-      const on = Math.abs(player.pos.x - w.def.x) < Models.PAD_SIZE / 2 + 0.15 && Math.abs(player.pos.z - w.def.z) < Models.PAD_SIZE / 2 + 0.15;
+      const on = Math.abs(player.pos.x - w.def.x) < PAD_REACH && Math.abs(player.pos.z - w.def.z) < PAD_REACH;
       w.payT -= dt;
       if (on && !player.dead && w.payT <= 0) {
         const it = popStack(player.c, 'log');
@@ -421,9 +421,10 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     return l.axis === 'x' ? new THREE.Vector3(mid, 1, l.at) : new THREE.Vector3(l.at, 1, mid);
   }
 
+  // you pay when you stand inside a square: brushing its edge on the way past doesn't count
+  const PAD_REACH = Models.PAD_SIZE / 2 - 0.1;
   function onPad(z) {
-    return Math.abs(player.pos.x - z.def.x) < Models.PAD_SIZE / 2 + 0.15 &&
-           Math.abs(player.pos.z - z.def.z) < Models.PAD_SIZE / 2 + 0.15;
+    return Math.abs(player.pos.x - z.def.x) < PAD_REACH && Math.abs(player.pos.z - z.def.z) < PAD_REACH;
   }
 
   let cash = 0;
@@ -905,8 +906,21 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
   }
 
   // ---------- Selling ----------
-  // Wood still needed by the build squares that are open right now.
-  const logsNeeded = () => zones.reduce((n, z) => n + (z.state === 'open' && z.currency === 'log' ? z.total - z.paid : 0), 0);
+  // Wood still needed right now: open build squares, wall repairs and ballista / poison bolt squares.
+  // (the sell table only buys wood beyond that, so it never eats your repair wood)
+  const logsNeeded = () =>
+    zones.reduce((n, z) => n + (z.state === 'open' && z.currency === 'log' ? z.total - z.paid : 0), 0) +
+    walls.reduce((n, w) => n + Math.ceil((WALL.hp - w.hp) / WALL.repairPerLog), 0) +
+    upgradeLogsNeeded();
+  // ballista / poison bolt wood only counts once you hold the heartwood / vial (or already paid it in)
+  function upgradeLogsNeeded() {
+    let n = countOf(player.c, 'heartwood') * BALLISTA.cost.logs + countOf(player.c, 'vial') * BALLISTA.poisonCost.logs;
+    for (const t of towers) {
+      const cost = t.up && upgradeFor(t)?.cost;
+      if (cost && (t.up.paid.heartwood || t.up.paid.vial)) n += Math.max(0, cost.logs - (t.up.paid.logs || 0));
+    }
+    return n;
+  }
 
   // Selling speeds up with the bag level (faster ticks, then 2-3 items per tick).
   function sellFrom(c, dt) {
@@ -921,7 +935,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     // then any wood nothing can use anymore, so the bag never gets stuck full
     let type = ['spicy', 'smoked', 'steak', 'meat'].find((t) => countOf(c, t)) || null;
     if (!type && countOf(c, 'toxic') && !grill.built) type = 'toxic';
-    if (!type && c.isPlayer && countOf(c, 'log') > logsNeeded()) type = 'log';
+    if (!type && c.isPlayer && player.stillT > 0.5 && countOf(c, 'log') > logsNeeded()) type = 'log';
     if (!type) return;
     const it = popStack(c, type);
     if (!it) return;
@@ -1405,7 +1419,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       if (t.up && t.up.kind !== want.kind) clearUp(t);
       if (!t.up) {
         const pad = Models.makePad(want.kind === 'poison' ? 0x8fe05a : 0xffc84a);
-        pad.scale.setScalar(1.55);
+        pad.scale.setScalar(1.2);
         pad.position.set(t.x, 0, t.z);
         scene.add(pad);
         // restore what was already paid into this square before the game was closed
@@ -1418,10 +1432,10 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       const keys = Object.keys(cost);
       u.label.innerHTML = `<div><span class="name">${want.name}</span>${keys.map((k) => `${ITEM_ICON[k]} ${left(k)}`).join(' · ')}</div>`;
       Models.setPadProgress(u.pad, keys.reduce((s, k) => s + (u.paid[k] || 0) / cost[k], 0) / keys.length);
-      const s = fx.toScreen(new THREE.Vector3(t.x, 0.2, t.z + 1.7));
+      const s = fx.toScreen(new THREE.Vector3(t.x, 0.2, t.z + 0.9));
       u.label.style.left = s.x + 'px'; u.label.style.top = s.y + 'px';
       u.payT -= dt;
-      if (player.dead || dist2d(player.pos, t) > 1.75 || u.payT > 0) continue;
+      if (player.dead || dist2d(player.pos, t) > 1.4 || u.payT > 0) continue;
       u.payT = ECONOMY.payTick;
       const target = new THREE.Vector3(t.x, 1.6, t.z);
       // special item first, then logs, then cash
@@ -1872,7 +1886,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     const logZone = openLog.find((z) => z.def.kind === 'grill') || openLog[0];
     if (logZone && logs > 0) tips.push({ key: 'build', icon: '🪵', text: `Bring wood to the ${logZone.def.name} square`, pos: padPos(logZone) });
     if (logZone && woodpile.count > 0) tips.push({ key: 'woodpile', icon: '🪵', text: 'Grab wood from your wood storage', pos: woodpile.pos.clone() });
-    if (counter.built && logs > logsNeeded()) tips.push({ key: 'spareWood', icon: '🪵', text: 'Spare wood? Sell it at the SELL TABLE for $1 each', pos: counter.pos.clone() });
+    if (counter.built && logs > logsNeeded()) tips.push({ key: 'spareWood', icon: '🪵', text: 'Spare wood? Stand still at the SELL TABLE to sell it for $1 each', pos: counter.pos.clone() });
 
     const next = cashPads.sort(byLeft)[0];
     if (next && counter.built) tips.push({ key: 'hunt', info: 10, icon: '🐻', text: `Hunt bears for meat and sell it to afford the ${padName(next)}` });
@@ -1892,7 +1906,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
   }
   stationLabel('SELL TABLE<small>meat & spare wood → 💵</small>', () => counter.pos.clone().setY(2.6), () => counter.built, 'sell');
   stationLabel('💵 PICK UP', () => new THREE.Vector3(counter.pos.x + 1.5, 1.4, counter.pos.z + 0.3), () => counter.built && counter.pile.length > 0 && !learned.has('cash'));
-  stationLabel('GRILL<small>raw meat → $12 steak</small>', () => grill.pos.clone().setY(2), () => grill.built, 'grill');
+  stationLabel('GRILL<small>raw meat → $12 steak</small>', () => grill.pos.clone().setY(1.3).setZ(grill.pos.z + 0.6), () => grill.built, 'grill');
   stationLabel('SMOKEHOUSE<small>2× faster · $20 smoked meat</small>', () => smoker.pos.clone().setY(2.6), () => smoker.built, 'smoker');
   stationLabel('WOOD STORAGE<small>your lumberjack fills it</small>', () => woodpile.pos.clone().setY(1.9), () => woodpile.built, 'woodpile');
 
@@ -1966,6 +1980,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       // the autopilot presses TRY AGAIN by itself so long recordings keep going
       if (auto.on) { auto.deadT = (auto.deadT || 0) + dt; if (auto.deadT > 1.5) { auto.deadT = 0; retry(); } }
     }
+    P.stillT = Math.hypot(mx, mz) > 0.1 ? 0 : (P.stillT || 0) + dt;
     const bx = P.pos.x, bz = P.pos.z;
     P.vel.set(mx * PLAYER.speed, 0, mz * PLAYER.speed);
     P.pos.addScaledVector(P.vel, dt);
