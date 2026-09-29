@@ -1059,7 +1059,8 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
   const thrown = [];      // logs in flight from log throwers
 
   // kind: 'normal' or a BOSSES key. hpMult scales late waves.
-  function spawnBear(kind, hpMult = 1) {
+  // n = the wave it belongs to (normal bears bite harder in later waves)
+  function spawnBear(kind, hpMult = 1, n = waves.n) {
     const boss = kind !== 'normal';
     const def = boss ? BOSSES[kind] : BEAR;
     const a = -Math.PI / 2 + (Math.random() - 0.5) * 2.4; // mostly from the north
@@ -1076,6 +1077,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     const maxArmor = def.armor ? Math.round(def.armor * hpMult) : 0;
     bears.push({
       obj, pos, def, kind, boss, hp: maxHp, maxHp, armor: maxArmor, maxArmor, armorBar, hpMult,
+      bite: boss ? def.damage : Math.round(BEAR.damage(Math.max(1, n)) * 10) / 10,
       attackT: def.attackRate, throwT: def.firstThrow ?? def.throwEvery ?? 0, bubbleT: 0,
       bar, flash: 0, lunge: 0, walkT: Math.random() * 6, dying: 0, vel: V(),
     });
@@ -1283,7 +1285,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
         if (b.attackT <= 0) {
           b.attackT = b.def.attackRate;
           b.lunge = 1;
-          hurtPlayer(b.def.damage);
+          hurtPlayer(b.bite);
           if (b.kind === 'poison') poisonPlayer(POISON.bite);
         }
       } else b.attackT = Math.min(b.attackT, b.def.attackRate * 0.5);
@@ -1458,12 +1460,12 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       dmg -= soaked;
       fx.burst(P.pos.clone().setY(1.2), 0x9fd0ff, 5, { speed: 3, up: 3, size: 0.09 });
       sfx.play('block');
-      if (dmg <= 0) { fx.text(P.pos.clone().setY(2.2), `-${soaked} 🛡️`, 'warn', { life: 0.6, rise: 40 }); return; }
+      if (dmg <= 0) { fx.text(P.pos.clone().setY(2.2), `-${Math.round(soaked * 10) / 10} 🛡️`, 'warn', { life: 0.6, rise: 40 }); return; }
     }
     sfx.play(ignoreArmor ? 'poison' : 'hurt');
     P.hp -= dmg;
     fx.addShake(ignoreArmor ? 0.06 : 0.2);
-    fx.text(P.pos.clone().setY(2.2), `-${dmg}`, 'hurt', { life: 0.6, rise: 40 });
+    fx.text(P.pos.clone().setY(2.2), `-${Math.round(dmg * 10) / 10}`, 'hurt', { life: 0.6, rise: 40 });
     fx.burst(P.pos.clone().setY(1), ignoreArmor ? 0x8fe05a : 0xe04848, 5, { speed: 3, up: 3, size: 0.09 });
     hud.flashHurt();
     if (P.hp <= 0) {
@@ -1709,10 +1711,10 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     const n = waves.n;
     const count = WAVES.countFor(n);
     const hpMult = WAVES.hpScale(n);
-    for (let i = 0; i < count; i++) waves.queue.push({ kind: 'normal', hpMult });
+    for (let i = 0; i < count; i++) waves.queue.push({ kind: 'normal', hpMult, n });
     // bosses arrive after the first regular bears
     const bosses = WAVES.bossesFor(n);
-    bosses.forEach((kind, i) => waves.queue.splice(Math.min(waves.queue.length, 2 + i * 3), 0, { kind, hpMult: WAVES.bossScale(n) }));
+    bosses.forEach((kind, i) => waves.queue.splice(Math.min(waves.queue.length, 2 + i * 3), 0, { kind, hpMult: WAVES.bossScale(n), n }));
     if (bosses.length) {
       const names = [...new Set(bosses)].map((k) => {
         const c = bosses.filter((x) => x === k).length;
@@ -2259,7 +2261,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       }
       if (waves.queue.length) {
         waves.gap -= dt;
-        if (waves.gap <= 0) { const q = waves.queue.shift(); spawnBear(q.kind, q.hpMult); waves.gap = WAVES.spawnGap; }
+        if (waves.gap <= 0) { const q = waves.queue.shift(); spawnBear(q.kind, q.hpMult, q.n); waves.gap = WAVES.spawnGap; }
       }
     }
     const aliveBears = bears.filter((b) => !b.dying).length;

@@ -6,7 +6,7 @@ export const CAMP_HALF = 7.5;
 export const PLAYER = {
   speed: 6,
   radius: 0.45,
-  maxHp: 20,
+  maxHp: 30,         // v0.4.5: 30 (was 20), a safety margin for the first minutes
   regenDelay: 3,     // seconds without damage before regen starts
   regenRate: 3,      // hp per second
   swingCooldown: 0.42,
@@ -15,9 +15,9 @@ export const PLAYER = {
   pickupRange: 2.2,
   baseBag: 12,
   bagPerLevel: 4,
-  // v0.4.3 linear rebalance: +1.5 damage per axe level (1, 2.5, 4, 5.5…). With one level per
-  // wave it keeps pace with the bears' +2 hp per wave: 2 hits per bear from wave 5 onward.
-  damage: (axeLevel) => 1 + axeLevel * 1.5,
+  // Linear: +1.5 damage per axe level from 2 (2, 3.5, 5, 6.5…), so a wave 1 bear (3 hp) falls in
+  // 2 hits. With one level per wave it keeps pace with the bears' +2 hp per wave: 2 hits all game.
+  damage: (axeLevel) => 2 + axeLevel * 1.5,
   // logs per axe hit on a tree: 1, then 2 from AXE LV5 (level 4), 3 from LV9 = one-shot trees
   chopPower: (axeLevel) => Math.min(3, 1 + Math.floor(axeLevel / 4)),
   // selling gets faster with the bag level: +15% speed per level, then 2-3 items per tick
@@ -38,7 +38,8 @@ export const TREE = {
 // wallHit: damage per swing to a wall that's in the way (bears chew through fences → repairs cost wood).
 // It grows like the bear's hp: × WAVES.hpScale for bears, × WAVES.bossScale for bosses (and the thrower's logs).
 export const BEAR = {
-  hp: 3, speed: 3.1, damage: 1, attackRate: 1, radius: 0.6, meat: 3, scale: 1, wallHit: 1,
+  // damage per bite grows with the wave n: 0.5 at wave 1, 1 at wave 6, 2 from wave 16 on
+  hp: 3, speed: 3.1, damage: (n) => Math.min(2, 0.4 + n * 0.1), attackRate: 1, radius: 0.6, meat: 3, scale: 1, wallHit: 1,
 };
 
 // Bosses: one every 3 waves (see WAVES.bossesFor). `cash` = loot bag dropped on death.
@@ -60,7 +61,7 @@ export const BOSSES = {
 export const BOSS_ORDER = ['mega', 'armored', 'thrower', 'poison'];
 
 // Poison never wears off: it keeps ticking until you die or reach the campfire
-// (1 hp/s with 20 hp = about 20 s to get there).
+// (1 hp/s with 30 hp = about 30 s to get there).
 export const POISON = {
   dps: 1,            // damage per second while poisoned (ignores armor)
   bite: Infinity,    // a bite poisons you until you're cured at the campfire
