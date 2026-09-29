@@ -513,7 +513,9 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     return p.z < ANNEX_END + 0.5 ? 'annex' : 'out';
   }
   const isInside = (p) => region(p) !== 'out';
-  const clampRange = (v, lo, hi) => THREE.MathUtils.clamp(v, lo + 1.3, hi - 1.3);
+  // an open side is crossed at least 2.4 m from its corners: the corner towers (1.5 m deep + a
+  // body) sit there, and the old 1.3 m margin sent the lumberjack straight into the tower
+  const clampRange = (v, lo, hi) => THREE.MathUtils.clamp(v, lo + 2.4, hi - 2.4);
 
   // Portals between two regions for this trip (open sides sit near the from→to midpoint).
   function portals(from, to) {
