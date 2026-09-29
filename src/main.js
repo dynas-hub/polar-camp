@@ -82,6 +82,8 @@ const fx = createFx(scene, camera, labelsEl, stage);
 const sfx = createAudio();
 const unlockAudio = () => sfx.unlock();
 ['pointerdown', 'keydown', 'touchend'].forEach((ev) => window.addEventListener(ev, unlockAudio, { passive: true }));
+// back from the home screen / a call: wake the sound up again (the next tap does it too)
+document.addEventListener('visibilitychange', () => { if (!document.hidden) unlockAudio(); });
 const soundBtn = document.getElementById('sound-btn');
 const showSound = () => { soundBtn.textContent = sfx.muted ? '🔇' : '🔊'; };
 showSound();

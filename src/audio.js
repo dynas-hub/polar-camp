@@ -11,7 +11,7 @@ const THROTTLE = {
 };
 
 export function createAudio() {
-  let ctx = null, master = null, noiseBuf = null;
+  let ctx = null, master = null, noiseBuf = null, primed = false;
   let muted = false;
   try { muted = localStorage.getItem(MUTE_KEY) === '1'; } catch { /* ignore */ }
   const last = {};
@@ -25,6 +25,10 @@ export function createAudio() {
     if (ctx) return;
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
+    // iPhone: game sound counts as "ambient" by default, which the ring/silent switch mutes
+    // completely. 'playback' plays it like a video does, even in silent mode (iOS 17+);
+    // the 🔊 button in the game still mutes it.
+    try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch { /* older browsers */ }
     ctx = new AC();
     const comp = ctx.createDynamicsCompressor();
     comp.threshold.value = -18; comp.ratio.value = 4;
@@ -110,7 +114,18 @@ export function createAudio() {
     // call from a user gesture (first tap / PLAY) so phones allow sound
     unlock() {
       init();
-      if (ctx && ctx.state === 'suspended') ctx.resume();
+      if (!ctx) return;
+      // 'suspended' before the first tap, 'interrupted' on iPhone after a call or a trip to the
+      // background (that one used to stay silent for good): resume from any state but running
+      if (ctx.state !== 'running') ctx.resume().catch(() => {});
+      // older iPhones only really start the sound once something plays inside the tap itself
+      if (!primed) {
+        primed = true;
+        const s = ctx.createBufferSource();
+        s.buffer = ctx.createBuffer(1, 1, 22050);
+        s.connect(ctx.destination);
+        s.start(0);
+      }
     },
     setListener(x, z) { listener.x = x; listener.z = z; },
     names: () => Object.keys(SOUNDS),
