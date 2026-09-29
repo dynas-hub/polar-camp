@@ -405,9 +405,9 @@ export function makeTower() {
   for (const [x, z] of [[-0.6, -0.6], [0.6, -0.6], [-0.6, 0.6], [0.6, 0.6]]) {
     g.add(part(G.box, M.woodDark, 0.08, 0.9, 0.08, x, 2.9, z));
   }
-  // Rotating crossbow on the platform.
+  // Rotating crossbow, raised above the rail (top at 2.62) so it never clips through it.
   const head = new THREE.Group();
-  head.position.set(0, 2.55, 0);
+  head.position.set(0, 2.85, 0);
   head.add(part(G.box, M.woodDark, 0.12, 0.12, 0.7, 0, 0, 0.1));
   head.add(part(G.box, M.wood, 0.8, 0.07, 0.1, 0, 0, 0.35));
   head.add(part(G.box, M.steel, 0.05, 0.05, 0.4, 0, 0.07, 0.25));
@@ -428,11 +428,12 @@ export function makeBallista() {
   g.add(part(G.cone, gold, 0.18, 0.4, 0.18, 0, 4.1, 0));
   const head = g.userData.head;
   head.clear();
-  head.add(part(G.box, iron, 0.2, 0.2, 1.1, 0, 0, 0.15));
-  const bowL = part(G.box, M.steel, 0.8, 0.08, 0.12, -0.42, 0, 0.62); bowL.rotation.y = -0.35;
-  const bowR = part(G.box, M.steel, 0.8, 0.08, 0.12, 0.42, 0, 0.62); bowR.rotation.y = 0.35;
+  // (kept inside the corner posts, radius 0.85, as it turns: the old bow poked through them)
+  head.add(part(G.box, iron, 0.2, 0.2, 1.0, 0, 0, 0.15));
+  const bowL = part(G.box, M.steel, 0.6, 0.08, 0.12, -0.3, 0, 0.38); bowL.rotation.y = -0.35;
+  const bowR = part(G.box, M.steel, 0.6, 0.08, 0.12, 0.3, 0, 0.38); bowR.rotation.y = 0.35;
   head.add(bowL, bowR);
-  const bolt = part(G.cylLo, gold, 0.05, 0.9, 0.05, 0, 0.12, 0.3);
+  const bolt = part(G.cylLo, gold, 0.05, 0.8, 0.05, 0, 0.12, 0.25);
   bolt.rotation.x = Math.PI / 2;
   head.add(bolt);
   g.userData.ballista = true;

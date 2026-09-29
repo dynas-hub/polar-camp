@@ -848,19 +848,32 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       }
     }
 
+    // Strict errands: it used to pick the closest cooker with food every frame, so it turned back
+    // and forth between the grill and the smokehouse as they kept cooking.
+    // 1. COLLECT: one cooker, the smokehouse first (it sells higher), locked until the bag is full
+    //    or that cooker is empty. No change of mind on the way.
+    // 2. DELIVER: anything in the bag goes straight to the sell table; no cooker until it's empty.
     if (h.kind === 'cashier') {
-      const has = countOf(c, 'steak') + countOf(c, 'spicy') + countOf(c, 'smoked') + countOf(c, 'meat');
-      const ready = nearestCooker(h.pos, (k) => k.out > 0);
-      if (h.state === 'deliver' || (has > 0 && (stackFree(c) <= 0 || !ready))) {
-        h.state = 'deliver';
-        if (walkTo(h, spots.counter(), dt, 0.5)) {
-          sellFrom(c, dt);
-          if (c.stack.length === 0 && c.incoming === 0) h.state = 'idle';
+      if (h.state === 'collect') {
+        const k = h.lock;
+        if (!k || !k.built) { h.lock = null; h.state = 'idle'; }
+        else if (walkTo(h, spots.grillOut(k), dt, 0.5)) {
+          if (stackFree(c) > 0 && k.out > 0) takeFromGrill(c, k);
+          else if (c.incoming === 0) { h.lock = null; h.state = 'idle'; }
         }
-      } else if (ready) {
-        if (walkTo(h, spots.grillOut(ready), dt, 0.5)) takeFromGrill(c, ready);
-      } else if (c.incoming === 0) {
-        walkTo(h, spots.counter().add(new THREE.Vector3(-1.4, 0, 0.4)), dt, 0.6);
+      }
+      if (h.state !== 'collect') {
+        if (c.stack.length || c.incoming) h.state = 'deliver';
+        if (h.state === 'deliver') {
+          if (walkTo(h, spots.counter(), dt, 0.5)) {
+            sellFrom(c, dt);
+            if (c.stack.length === 0 && c.incoming === 0) h.state = 'idle';
+          }
+        } else {
+          h.lock = [smoker, grill].find((k) => k.built && k.out > 0) || null;
+          if (h.lock) h.state = 'collect';
+          else walkTo(h, spots.counter().add(new THREE.Vector3(-1.4, 0, 0.4)), dt, 0.6);
+        }
       }
     }
 
@@ -1643,7 +1656,8 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
           t.fireT = t.fireRate;
           const arrow = Models.makeArrow();
           if (t.ballista) arrow.scale.setScalar(1.9); // heavy bolt
-          arrow.position.set(t.x, t.ballista ? 3 : 2.7, t.z);
+          // leaves from the tip of the raised crossbow (above the rail), not from inside the tower
+          arrow.position.set(t.x + Math.sin(ang) * 0.6, t.ballista ? 3.3 : 2.95, t.z + Math.cos(ang) * 0.6);
           scene.add(arrow);
           if (t.poison) arrow.children.forEach((m) => { m.material = POISON_BOLT; });
           arrows.push({ obj: arrow, target, last: target.pos.clone(), dmg: Math.round(t.damage * towerMult() * 10) / 10, pierce: t.ballista, poison: t.poison, speed: t.ballista ? BALLISTA.boltSpeed : TOWER.arrowSpeed });
