@@ -6,8 +6,11 @@ import { createFx } from './fx.js';
 import { createGame } from './game.js';
 import { createRecorder } from './recorder.js';
 import { createAudio } from './audio.js';
+import { initI18n, setLang, getLang, onLangChange, savedLang, t, LANGS } from './i18n.js';
 
 const params = new URLSearchParams(location.search);
+// texts first (English on first launch). Autopilot footage is always in English and never saves a choice.
+await initI18n(params.has('auto') ? 'en' : null);
 if (params.has('shorts')) document.body.classList.add('shorts');
 // ?reset=1 starts a fresh game (wipes the local save)
 // ?slot=test uses a separate save (for testing without touching the real one)
@@ -85,9 +88,13 @@ const unlockAudio = () => sfx.unlock();
 // back from the home screen / a call: wake the sound up again (the next tap does it too)
 document.addEventListener('visibilitychange', () => { if (!document.hidden) unlockAudio(); });
 const soundBtn = document.getElementById('sound-btn');
-const showSound = () => { soundBtn.textContent = sfx.muted ? '🔇' : '🔊'; };
+const showSound = () => {
+  soundBtn.textContent = sfx.muted ? '🔇' : '🔊';
+  document.querySelectorAll('#opt-sound button').forEach((b) => b.classList.toggle('on', (b.dataset.sound === 'off') === sfx.muted));
+};
 showSound();
-soundBtn.addEventListener('click', () => { sfx.setMuted(!sfx.muted); showSound(); sfx.play('click'); });
+const setMuted = (m) => { sfx.setMuted(m); showSound(); sfx.play('click'); };
+soundBtn.addEventListener('click', () => setMuted(!sfx.muted));
 
 // Autopilot sessions (footage/tests) never read or write the player's save.
 const game = createGame({ scene, camera, fx, input, hud, labelsEl, useSave: !params.has('auto'), sfx, saveKey: SAVE_KEY });
@@ -104,20 +111,80 @@ const store = {
 };
 
 if (game.loaded) {
-  $('play').textContent = 'CONTINUE';
+  $('play').dataset.i18n = 'title.continue';
+  $('play').textContent = t('title.continue');
   $('new-game').classList.remove('hidden');
 }
 
+// How to play: one row per topic, texts from the locale (help.<id>.t / help.<id>.d)
+const HELP_ROWS = [
+  ['🕹️', 'move'], ['🌲', 'chop'], ['⬜', 'build'], ['🐻', 'fight'], ['🥩', 'sell'], ['🔥', 'grill'],
+  ['👷', 'workers'], ['⬆️', 'upgrades'], ['🔥', 'campfire'], ['🧱', 'walls'], ['🏕️', 'expansion'], ['👑', 'bosses'],
+  ['🛡️', 'armored'], ['🤢', 'poison'], ['🪵', 'thrower'], ['🌟', 'ballista'], ['🧪', 'bolts'],
+];
+$('help-list').innerHTML = HELP_ROWS.map(([icon, id]) =>
+  `<div class="row"><span>${icon}</span><div><b data-i18n="help.${id}.t"></b><i data-i18n="help.${id}.d"></i></div></div>`).join('');
+
+// Little original flag drawings for the language buttons
+const FLAGS = {
+  en: '<svg viewBox="0 0 60 40"><rect width="60" height="40" fill="#1f3f8f"/><path d="M0 0L60 40M60 0L0 40" stroke="#fff" stroke-width="8"/><path d="M0 0L60 40M60 0L0 40" stroke="#d6293a" stroke-width="3"/><path d="M30 0V40M0 20H60" stroke="#fff" stroke-width="12"/><path d="M30 0V40M0 20H60" stroke="#d6293a" stroke-width="7"/></svg>',
+  fr: '<svg viewBox="0 0 60 40"><rect width="20" height="40" fill="#2446a8"/><rect x="20" width="20" height="40" fill="#fff"/><rect x="40" width="20" height="40" fill="#e0373d"/></svg>',
+  es: '<svg viewBox="0 0 60 40"><rect width="60" height="40" fill="#c8202e"/><rect y="10" width="60" height="20" fill="#f6c22c"/></svg>',
+};
+document.querySelectorAll('[data-flag]').forEach((el) => { el.innerHTML = FLAGS[el.dataset.flag]; });
+
+function showLang(l) {
+  $('lang-link-flag').innerHTML = FLAGS[l];
+  $('lang-link-name').textContent = LANGS.find((x) => x.id === l).name;
+  document.querySelectorAll('#opt-lang button').forEach((b) => b.classList.toggle('on', b.dataset.lang === l));
+  document.querySelectorAll('.plank').forEach((b) => b.classList.toggle('sel', b.dataset.lang === l));
+}
+onLangChange((l) => { showLang(l); game.relabel(); });
+setLang(getLang(), { save: false }); // fills the help rows and every data-i18n text now that they exist
+
+// Help and Options freeze the game while open
+function pause(on) {
+  paused = on;
+  if (on) input.setEnabled(false);
+  else if (started && !game.player.dead) input.setEnabled(true);
+}
 function openHelp() {
-  paused = true;
-  input.setEnabled(false);
+  pause(true);
   $('help').classList.remove('hidden');
 }
 function closeHelp() {
   $('help').classList.add('hidden');
   store.set('polarcamp-seen-help', '1');
-  paused = false;
-  if (started && !game.player.dead) input.setEnabled(true);
+  pause(false);
+}
+function openOptions() {
+  sfx.play('click');
+  showSound();
+  pause(true);
+  $('options').classList.remove('hidden');
+}
+function closeOptions() {
+  $('options').classList.add('hidden');
+  pause(false);
+}
+$('options-btn').addEventListener('click', openOptions);
+$('lang-link').addEventListener('click', openOptions);
+$('options-close').addEventListener('click', closeOptions);
+document.querySelectorAll('#opt-lang button').forEach((b) => b.addEventListener('click', () => { sfx.play('click'); setLang(b.dataset.lang); }));
+document.querySelectorAll('#opt-sound button').forEach((b) => b.addEventListener('click', () => setMuted(b.dataset.sound === 'off')));
+
+// First launch: the signpost language picker, before the title screen. English is preselected;
+// tapping a plank previews the whole screen in that language, CONTINUE saves the choice.
+if (!savedLang() && !params.has('auto')) {
+  $('title-screen').classList.add('hidden');
+  $('lang-screen').classList.remove('hidden');
+  document.querySelectorAll('.plank').forEach((b) => b.addEventListener('click', () => { sfx.unlock(); sfx.play('click'); setLang(b.dataset.lang, { save: false }); }));
+  $('lang-go').addEventListener('click', () => {
+    sfx.play('click');
+    setLang(getLang());
+    $('lang-screen').classList.add('hidden');
+    $('title-screen').classList.remove('hidden');
+  });
 }
 
 function startGame() {
@@ -136,7 +203,7 @@ $('how').addEventListener('click', openHelp);
 $('help-btn').addEventListener('click', openHelp);
 $('help-close').addEventListener('click', closeHelp);
 $('new-game').addEventListener('click', () => {
-  if (!confirm('Start a new game? Your current camp will be lost.')) return;
+  if (!confirm(t('title.newGameConfirm'))) return;
   game.resetSave();
   location.replace(location.pathname); // reload without any URL flags
 });
@@ -144,6 +211,7 @@ $('new-game').addEventListener('click', () => {
 if (params.has('auto')) {
   $('title-screen').classList.add('hidden');
   $('help-btn').classList.add('hidden');
+  $('options-btn').classList.add('hidden');
   document.body.classList.add('playing');
   game.auto.on = true;
   started = true;

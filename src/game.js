@@ -6,6 +6,7 @@ import {
   WALLS, ANNEX_END, WORKERS, SMOKER,
 } from './config.js';
 import * as Models from './models.js';
+import { t as tr, tName } from './i18n.js';
 
 const V = () => new THREE.Vector3();
 const tmpA = V(), tmpB = V();
@@ -229,10 +230,10 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
   function refreshLabel(z) {
     const icon = CURRENCY_ICON[z.currency];
     const left = Math.max(0, z.total - z.paid);
-    const title = z.def.icon ? `${z.def.icon} ${z.def.name} LV${z.level + 1}` : z.def.name;
+    const title = z.def.icon ? `${z.def.icon} ${tr('pad.level', { name: tName(z.def.name), n: z.level + 1 })}` : tName(z.def.name);
     // the axe square shows what you're buying: damage now → after this level
     const fmt = (v) => (v < 10 ? v.toFixed(1) : Math.round(v));
-    const extra = z.def.id === 'axe' ? `<span class="name">dmg ${fmt(PLAYER.damage(z.level))} → ${fmt(PLAYER.damage(z.level + 1))}</span>` : '';
+    const extra = z.def.id === 'axe' ? `<span class="name">${tr('pad.dmg', { from: fmt(PLAYER.damage(z.level)), to: fmt(PLAYER.damage(z.level + 1)) })}</span>` : '';
     z.label.innerHTML = `<div><span class="name">${title}</span>${extra}${icon} ${left}</div>`;
   }
 
@@ -317,7 +318,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       const at = d.kind === 'wall' ? pointForWall(d.wall) : new THREE.Vector3(d.x, 1, d.z);
       fx.burst(at, 0xffffff, 18, { speed: 5, up: 5, size: 0.18 });
       fx.burst(at, 0xd09a5e, 10, { speed: 4, up: 4 });
-      fx.text(at.clone().setY(2.5), (d.kind === 'hire' ? d.name.replace('HIRE ', '') + ' HIRED' : d.name) + '!', 'warn', { life: 1.3, rise: 80 });
+      fx.text(at.clone().setY(2.5), d.kind === 'hire' ? tr('fx.hired.' + d.helper) : tr('fx.built', { name: tName(d.name) }), 'warn', { life: 1.3, rise: 80 });
       fx.addShake(0.25);
       sfx.play('build');
       events.push({ type: 'build', id: d.id, t: clock });
@@ -347,7 +348,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
         wallColliders.splice(wallColliders.indexOf(c), 1);
       }
       fx.burst(pointForWall(w.side).setY(1), 0xd09a5e, 30, { speed: 6, up: 5, size: 0.2 });
-      fx.text(pointForWall(w.side).setY(3), `${w.name} BROKEN!`, 'hurt', { life: 1.6, rise: 80 });
+      fx.text(pointForWall(w.side).setY(3), tr('fx.wallBroken', { wall: tName(w.name) }), 'hurt', { life: 1.6, rise: 80 });
       events.push({ type: 'wallBroken', side: w.side, t: clock });
     }
     wallLook(w);
@@ -361,7 +362,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       w.group.visible = true;
       colliders.push(...w.colliders);
       wallColliders.push(...w.colliders);
-      fx.text(pointForWall(w.side).setY(3), `${w.name} REBUILT!`, 'warn', { life: 1.3, rise: 70 });
+      fx.text(pointForWall(w.side).setY(3), tr('fx.wallRebuilt', { wall: tName(w.name) }), 'warn', { life: 1.3, rise: 70 });
     }
     wallLook(w);
   }
@@ -393,7 +394,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       }
       if (!w.pad) continue;
       const need = Math.ceil((wallMax() - w.hp) / repairPerLog());
-      w.label.innerHTML = `<div><span class="name">REPAIR ${w.name}</span>🪵 ${need}</div>`;
+      w.label.innerHTML = `<div><span class="name">${tr('pad.repair', { wall: tName(w.name) })}</span>🪵 ${need}</div>`;
       Models.setPadProgress(w.pad, w.hp / wallMax());
       const s = fx.toScreen(new THREE.Vector3(w.def.x, 0.2, w.def.z + 0.2));
       w.label.style.left = s.x + 'px'; w.label.style.top = s.y + 'px';
@@ -486,7 +487,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     u.level++;
     const at = new THREE.Vector3(u.def.x, 1.5, u.def.z);
     fx.burst(at, 0xffd34d, 16, { speed: 5, up: 5, size: 0.16 });
-    fx.text(player.pos.clone().setY(2.6), `${u.def.name} LV${u.level + 1}!`, 'warn', { life: 1.2, rise: 80 });
+    fx.text(player.pos.clone().setY(2.6), tr('fx.levelUp', { name: tName(u.def.name), n: u.level + 1 }), 'warn', { life: 1.2, rise: 80 });
     fx.addShake(0.15);
     sfx.play('levelup');
     events.push({ type: 'upgrade', id: u.def.id, level: u.level, t: clock });
@@ -1029,7 +1030,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       onDone: () => {
         stats.sold++;
         if (price > 0) { addToPile(price); sfx.play('sell', { at: counter.pos }); }
-        else { fx.text(top.clone().setY(2), '$0 yuck!', 'hurt', { life: 0.8, rise: 40 }); sfx.play('full', { at: counter.pos }); }
+        else { fx.text(top.clone().setY(2), tr('fx.yuck'), 'hurt', { life: 0.8, rise: 40 }); sfx.play('full', { at: counter.pos }); }
       },
     });
   }
@@ -1108,7 +1109,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       if (!from && !pierce) {
         // arrows bounce off the plates
         fx.burst(at.clone().setY(1.2 * b.def.scale), 0xfff3a0, 4, { speed: 3, up: 2, size: 0.06 });
-        if (Math.random() < 0.35) fx.text(at.clone().setY(2 * b.def.scale), 'tink', 'warn', { life: 0.5, rise: 30 });
+        if (Math.random() < 0.35) fx.text(at.clone().setY(2 * b.def.scale), tr('fx.tink'), 'warn', { life: 0.5, rise: 30 });
         sfx.play('tink', { at: b.pos });
         return;
       }
@@ -1125,7 +1126,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
         p.parent.remove(p);
         const fall = b.pos.clone().add(new THREE.Vector3((Math.random() - 0.5) * 3, 0.1, (Math.random() - 0.5) * 3));
         fx.fly(p, wp, () => fall, { duration: 0.5, arc: 2, onDone: () => {} });
-        fx.text(at.clone().setY(2.3 * b.def.scale), b.armor > 0 ? 'CRACK!' : 'ARMOR BROKEN!', 'warn', { life: 1, rise: 60 });
+        fx.text(at.clone().setY(2.3 * b.def.scale), tr(b.armor > 0 ? 'fx.crack' : 'fx.armorBroken'), 'warn', { life: 1, rise: 60 });
         fx.addShake(0.15);
       }
       if (b.armorBar) Models.setHealth(b.armorBar, b.armor / b.maxArmor);
@@ -1168,12 +1169,12 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     fx.burst(b.pos.clone().setY(0.8), 0xffffff, b.boss ? 30 : 14, { speed: 5, up: 5, size: 0.2 });
     fx.addShake(b.boss ? 0.5 : 0.12);
     if (b.boss) {
-      fx.text(b.pos.clone().setY(3), `${b.def.name} DOWN!`, 'warn', { life: 1.5, rise: 90 });
+      fx.text(b.pos.clone().setY(3), tr('fx.bossDown', { name: tName(b.def.name) }), 'warn', { life: 1.5, rise: 90 });
       // shockwave: every bear on the map is stunned for a few seconds (time to heal and clean up)
       const ring = b.pos.clone().setY(0.4);
       fx.burst(ring, 0xfff3a0, 28, { speed: 12, up: 0.5, size: 0.22, life: 0.6 });
       for (const o of bears) if (o !== b && !o.dying) o.stunT = WAVES.bossStun;
-      if (bears.some((o) => o.stunT > 0 && !o.dying)) fx.text(b.pos.clone().setY(5.2), 'SHOCKWAVE: STUNNED!', 'warn', { life: 1.6, rise: 70 });
+      if (bears.some((o) => o.stunT > 0 && !o.dying)) fx.text(b.pos.clone().setY(5.2), tr('fx.shockwave'), 'warn', { life: 1.6, rise: 70 });
     }
     sfx.play(b.boss ? 'bossDown' : 'bearDown', { at: b.pos });
     events.push({ type: 'kill', kind: b.kind, t: clock });
@@ -1191,7 +1192,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       mesh.scale.setScalar(0.5);
       scene.add(mesh);
       clouds.push({ mesh, pos: b.pos.clone(), t: 0, burst: false });
-      fx.text(b.pos.clone().setY(3.5), 'STEP BACK!', 'hurt', { life: 1, rise: 50 });
+      fx.text(b.pos.clone().setY(3.5), tr('fx.stepBack'), 'hurt', { life: 1, rise: 50 });
     }
   }
 
@@ -1416,7 +1417,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     if (P.dead) return;
     if (P.poisonT <= 0) {
       P.poisonTick = 0;
-      fx.text(P.pos.clone().setY(2.8), '☠ POISONED', 'hurt', { life: 1, rise: 50 });
+      fx.text(P.pos.clone().setY(2.8), tr('fx.poisoned'), 'hurt', { life: 1, rise: 50 });
       sfx.play('poison');
     }
     P.poisonT = Math.max(P.poisonT, seconds); // refreshes, never stacks
@@ -1441,7 +1442,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       if (warm && fireActive()) {
         P.poisonT = 0;
         fireUsed = true;
-        fx.text(P.pos.clone().setY(2.6), 'CURED!', 'cash', { life: 1, rise: 50 });
+        fx.text(P.pos.clone().setY(2.6), tr('fx.cured'), 'cash', { life: 1, rise: 50 });
         sfx.play('cure');
         fx.burst(P.pos.clone().setY(1), 0xffc36b, 10, { speed: 2, up: 3, size: 0.1 });
         learn('campfire');
@@ -1460,7 +1461,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     if (warm && fireActive() && fireUsed && P.hp >= PLAYER.maxHp && P.poisonT <= 0) {
       fireUsed = false;
       fireCd = POISON.campfireRecharge;
-      fx.text(CAMPFIRE.clone().setY(2), 'RECHARGING…', 'warn', { life: 1.2, rise: 40 });
+      fx.text(CAMPFIRE.clone().setY(2), tr('fx.recharging'), 'warn', { life: 1.2, rise: 40 });
     }
     hud.setPoison(P.poisonT > 0);
   }
@@ -1531,7 +1532,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       const u = t.up, cost = want.cost;
       const left = (k) => cost[k] - (u.paid[k] || 0);
       const keys = Object.keys(cost);
-      u.label.innerHTML = `<div><span class="name">${want.name}</span>${keys.map((k) => `${ITEM_ICON[k]} ${left(k)}`).join(' · ')}</div>`;
+      u.label.innerHTML = `<div><span class="name">${tName(want.name)}</span>${keys.map((k) => `${ITEM_ICON[k]} ${left(k)}`).join(' · ')}</div>`;
       Models.setPadProgress(u.pad, keys.reduce((s, k) => s + (u.paid[k] || 0) / cost[k], 0) / keys.length);
       const s = fx.toScreen(new THREE.Vector3(t.x, 0.2, t.z + 0.9));
       u.label.style.left = s.x + 'px'; u.label.style.top = s.y + 'px';
@@ -1577,7 +1578,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     popIns.push({ obj: t.obj, t: 0 });
     const at = new THREE.Vector3(t.x, 2, t.z);
     fx.burst(at, 0xffc84a, 24, { speed: 5, up: 5, size: 0.18 });
-    fx.text(at.clone().setY(4), 'BALLISTA!', 'warn', { life: 1.4, rise: 80 });
+    fx.text(at.clone().setY(4), tr('fx.ballista'), 'warn', { life: 1.4, rise: 80 });
     fx.addShake(0.3);
     sfx.play('build'); sfx.play('levelup');
     events.push({ type: 'ballista', id: t.id, t: clock });
@@ -1595,7 +1596,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     if (silent) return;
     const at = new THREE.Vector3(t.x, 2.5, t.z);
     fx.burst(at, 0x8fe05a, 24, { speed: 5, up: 5, size: 0.18 });
-    fx.text(at.clone().setY(4), 'POISON BOLTS!', 'warn', { life: 1.4, rise: 80 });
+    fx.text(at.clone().setY(4), tr('fx.poisonBolts'), 'warn', { life: 1.4, rise: 80 });
     sfx.play('levelup'); sfx.play('poison');
     events.push({ type: 'poisonBallista', id: t.id, t: clock });
     learn('poisonBolts');
@@ -1624,7 +1625,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     Object.assign(t, { ballista: false, poison: false, range: TOWER.range, fireRate: TOWER.fireRate, damage: 1, hp: 0 });
     if (t.bar) t.bar.visible = false;
     fx.burst(at, 0xd09a5e, 30, { speed: 6, up: 5, size: 0.2 });
-    fx.text(at.clone().setY(3.5), 'BALLISTA DESTROYED!', 'hurt', { life: 1.6, rise: 80 });
+    fx.text(at.clone().setY(3.5), tr('fx.ballistaDestroyed'), 'hurt', { life: 1.6, rise: 80 });
     fx.addShake(0.4);
     sfx.play('crash', { at });
     // Hand the special parts back on the inner side of the tower, far enough (2.8 m) that
@@ -1633,7 +1634,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     const inward = new THREE.Vector3(-t.x, 0, cz - t.z).normalize().multiplyScalar(2.8).add(at);
     dropItem('heartwood', inward, 0.4);
     if (wasPoison) dropItem('vial', inward, 0.4);
-    fx.text(inward.clone().setY(2.2), wasPoison ? 'HEARTWOOD + VIAL DROPPED' : 'HEARTWOOD DROPPED', 'warn', { life: 2, rise: 60 });
+    fx.text(inward.clone().setY(2.2), tr(wasPoison ? 'fx.dropBoth' : 'fx.dropHeartwood'), 'warn', { life: 2, rise: 60 });
     events.push({ type: 'ballistaDestroyed', id: t.id, t: clock });
     save();
   }
@@ -1734,13 +1735,13 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     if (bosses.length) {
       const names = [...new Set(bosses)].map((k) => {
         const c = bosses.filter((x) => x === k).length;
-        return BOSSES[k].name + (c > 1 ? ` ×${c}` : '');
+        return tName(BOSSES[k].name) + (c > 1 ? ` ×${c}` : '');
       });
       hud.banner(`⚠ ${names.join(' + ')}!`);
       fx.addShake(0.4);
       sfx.play('bossHorn');
       events.push({ type: 'boss', kinds: bosses, n, t: clock });
-    } else { hud.banner(`WAVE ${n}: BEARS!`); sfx.play('horn'); }
+    } else { hud.banner(tr('banner.wave', { n })); sfx.play('horn'); }
     fx.addShake(0.2);
     events.push({ type: 'wave', n: waves.n, t: clock });
     waves.timer = waves.total = WAVES.interval;
@@ -1920,7 +1921,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
   let goal = null, goalT = 0;
 
   const padPos = (z) => new THREE.Vector3(z.def.x, 0, z.def.z);
-  const padName = (z) => (z.def.icon ? `${z.def.name} upgrade` : z.def.name);
+  const padName = (z) => (z.def.icon ? tr('tip.upgradeName', { name: tName(z.def.name) }) : tName(z.def.name));
   const nearestTree = () => {
     const p = player.pos;
     const t = trees.filter((x) => x.alive).sort((a, b) => dist2d(a, p) - dist2d(b, p))[0];
@@ -1951,74 +1952,84 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     const bear = bears.filter((b) => !b.dying).sort((a, b) => dist2d(a.pos, P.pos) - dist2d(b.pos, P.pos))[0];
 
     // --- boss moments first: each one explained the first time it happens ---
-    if (P.poisonT > 0) tips.push({ key: 'campfire', icon: '☠️', text: "Poisoned! It won't stop until you reach the campfire: run!", pos: CAMPFIRE.clone() });
-    if (clouds.some((cl) => !cl.burst)) tips.push({ key: 'cloud', info: 3, icon: '💨', text: 'The poison bear is about to burst: step back!' });
+    if (P.poisonT > 0) tips.push({ key: 'campfire', icon: '☠️', text: tr('tip.campfire'), pos: CAMPFIRE.clone() });
+    if (clouds.some((cl) => !cl.burst)) tips.push({ key: 'cloud', info: 3, icon: '💨', text: tr('tip.cloud') });
     const alive = (kind) => bears.find((b) => b.kind === kind && !b.dying);
     const armored = alive('armored');
-    if (armored && armored.armor > 0) tips.push({ key: 'bossArmored', info: 8, icon: '🛡️', text: 'ARMORED BEAR: arrows bounce off. Break its plates with your axe!', pos: armored.pos.clone() });
+    if (armored && armored.armor > 0) tips.push({ key: 'bossArmored', info: 8, icon: '🛡️', text: tr('tip.bossArmored'), pos: armored.pos.clone() });
     const thrower = alive('thrower');
-    if (thrower) tips.push({ key: 'bossThrower', info: 8, icon: '🪵', text: 'LOG THROWER: it smashes your walls from afar. Go out and hit it!', pos: thrower.pos.clone() });
+    if (thrower) tips.push({ key: 'bossThrower', info: 8, icon: '🪵', text: tr('tip.bossThrower'), pos: thrower.pos.clone() });
     const poisoner = alive('poison');
-    if (poisoner) tips.push({ key: 'bossPoison', info: 8, icon: '🤢', text: 'POISON BEAR: its bite poisons you, and it bursts when it dies', pos: poisoner.pos.clone() });
+    if (poisoner) tips.push({ key: 'bossPoison', info: 8, icon: '🤢', text: tr('tip.bossPoison'), pos: poisoner.pos.clone() });
     const loot = drops.find((d) => d.type === 'loot');
-    if (loot) tips.push({ key: 'loot', icon: '💰', text: 'Boss loot! Walk over the bag to grab the cash', pos: loot.pos.clone() });
+    if (loot) tips.push({ key: 'loot', icon: '💰', text: tr('tip.loot'), pos: loot.pos.clone() });
     const armorPad = upgrades.find((u) => u.def.id === 'armor' && u.state === 'open');
-    if (armorPad && countOf(c, 'plate')) tips.push({ key: 'forge', icon: '🛡️', text: 'Bring armor plates to the ARMOR square: armor soaks up hits', pos: padPos(armorPad) });
+    if (armorPad && countOf(c, 'plate')) tips.push({ key: 'forge', icon: '🛡️', text: tr('tip.forge'), pos: padPos(armorPad) });
     if (countOf(c, 'toxic')) {
-      if (grill.built) tips.push({ key: 'toxic', icon: '🤢', text: 'Toxic meat is worth $0 raw. Grill it into a $30 spicy steak!', pos: grill.pos.clone() });
-      else tips.push({ key: 'toxicNoGrill', info: 8, icon: '🤢', text: 'Toxic meat is worth $0 raw. Build the GRILL to cook it for $30' });
+      if (grill.built) tips.push({ key: 'toxic', icon: '🤢', text: tr('tip.toxic'), pos: grill.pos.clone() });
+      else tips.push({ key: 'toxicNoGrill', info: 8, icon: '🤢', text: tr('tip.toxicNoGrill') });
     }
     const plainTower = towers.find((t) => !t.ballista);
-    if (countOf(c, 'heartwood') && plainTower) tips.push({ key: 'ballista', icon: '🌟', text: 'Heartwood! Bring it + 20 wood + $250 to an arrow tower: BALLISTA (12 m, 9× arrow damage)', pos: new THREE.Vector3(plainTower.x, 0, plainTower.z) });
+    if (countOf(c, 'heartwood') && plainTower) tips.push({ key: 'ballista', icon: '🌟', text: tr('tip.ballista'), pos: new THREE.Vector3(plainTower.x, 0, plainTower.z) });
     const plainBallista = towers.find((t) => t.ballista && !t.poison);
-    if (countOf(c, 'vial') && plainBallista) tips.push({ key: 'poisonBolts', icon: '🧪', text: 'Poison vial! Bring it + 15 wood + $150 to a ballista: POISON BOLTS', pos: new THREE.Vector3(plainBallista.x, 0, plainBallista.z) });
-    if (countOf(c, 'vial') && !plainBallista && !towers.some((t) => t.poison)) tips.push({ key: 'vialKeep', info: 6, icon: '🧪', text: 'Keep this poison vial: it will give a ballista poison bolts' });
-    if (!fireActive() && dist2d(P.pos, CAMPFIRE) < 4) tips.push({ key: 'fireRecharge', info: 5, icon: '🔥', text: 'The campfire is recharging: it heals again in a few seconds' });
-    if (smoker.built && rawCount(c)) tips.push({ key: 'smoker', icon: '🏭', text: `The SMOKEHOUSE cooks twice as fast: smoked meat sells for $${SMOKER.price}`, pos: smoker.pos.clone() });
+    if (countOf(c, 'vial') && plainBallista) tips.push({ key: 'poisonBolts', icon: '🧪', text: tr('tip.poisonBolts'), pos: new THREE.Vector3(plainBallista.x, 0, plainBallista.z) });
+    if (countOf(c, 'vial') && !plainBallista && !towers.some((t) => t.poison)) tips.push({ key: 'vialKeep', info: 6, icon: '🧪', text: tr('tip.vialKeep') });
+    if (!fireActive() && dist2d(P.pos, CAMPFIRE) < 4) tips.push({ key: 'fireRecharge', info: 5, icon: '🔥', text: tr('tip.fireRecharge') });
+    if (smoker.built && rawCount(c)) tips.push({ key: 'smoker', icon: '🏭', text: tr('tip.smoker', { price: SMOKER.price }), pos: smoker.pos.clone() });
     const hurtWall = walls.find((w) => w.pad);
-    if (hurtWall) tips.push({ key: 'repair', icon: '🔨', text: `${hurtWall.name} is ${hurtWall.broken ? 'broken' : 'damaged'}! Bring wood to its REPAIR square`, pos: padPos({ def: hurtWall.def }) });
+    if (hurtWall) tips.push({ key: 'repair', icon: '🔨', text: tr(hurtWall.broken ? 'tip.repairBroken' : 'tip.repairDamaged', { wall: tName(hurtWall.name) }), pos: padPos({ def: hurtWall.def }) });
 
-    if (bear && dist2d(bear.pos, P.pos) < 6) tips.push({ key: 'fight', icon: '🐻', text: 'Bears! Stay close to hit them. Low HP? Run back under your towers.' });
+    if (bear && dist2d(bear.pos, P.pos) < 6) tips.push({ key: 'fight', icon: '🐻', text: tr('tip.fight') });
 
     // (once chopping is learned, the generic "Bring wood to the SELL TABLE square" tip below takes over)
-    if (!counter.built) tips.push({ key: 'chop', icon: '🌲', text: 'Walk next to a tree to chop it', pos: nearestTree() });
-    if (counter.pile.length) tips.push({ key: 'cash', icon: '💵', text: 'Pick up your cash next to the sell table', pos: new THREE.Vector3(counter.pos.x + 1.5, 0, counter.pos.z + 0.3) });
-    if (meat && grill.built) tips.push({ key: 'grill', icon: '🔥', text: 'Put raw meat on the GRILL: steaks sell for $12 instead of $5', pos: grill.pos.clone() });
-    if (grill.out > 0 && stackFree(c) > 0 && !helpers.some((h) => h.kind === 'cashier')) tips.push({ key: 'grillTake', icon: '🍖', text: 'Grab the cooked steaks from the grill', pos: spots.grillOut() });
-    if ((meat || steaks) && counter.built) tips.push({ key: 'sell', icon: '🥩', text: 'Sell your meat at the SELL TABLE', pos: counter.pos.clone() });
+    if (!counter.built) tips.push({ key: 'chop', icon: '🌲', text: tr('tip.chop'), pos: nearestTree() });
+    if (counter.pile.length) tips.push({ key: 'cash', icon: '💵', text: tr('tip.cash'), pos: new THREE.Vector3(counter.pos.x + 1.5, 0, counter.pos.z + 0.3) });
+    if (meat && grill.built) tips.push({ key: 'grill', icon: '🔥', text: tr('tip.grill'), pos: grill.pos.clone() });
+    if (grill.out > 0 && stackFree(c) > 0 && !helpers.some((h) => h.kind === 'cashier')) tips.push({ key: 'grillTake', icon: '🍖', text: tr('tip.grillTake'), pos: spots.grillOut() });
+    if ((meat || steaks) && counter.built) tips.push({ key: 'sell', icon: '🥩', text: tr('tip.sell'), pos: counter.pos.clone() });
 
     const byLeft = (a, b) => (a.total - a.paid) - (b.total - b.paid);
     const cashPads = [...zones, ...upgrades].filter((z) => z.state === 'open' && z.currency === 'cash');
     const affordable = cashPads.filter((z) => cash >= z.total - z.paid).sort(byLeft)[0];
-    if (affordable) tips.push({ key: 'buy', icon: '💵', text: `You can buy: ${padName(affordable)}. Stand on its square`, pos: padPos(affordable) });
+    if (affordable) tips.push({ key: 'buy', icon: '💵', text: tr('tip.buy', { name: padName(affordable) }), pos: padPos(affordable) });
 
     const openLog = zones.filter((z) => z.state === 'open' && z.currency === 'log');
     const logZone = openLog.find((z) => z.def.kind === 'grill') || openLog[0];
-    if (logZone && logs > 0) tips.push({ key: 'build', icon: '🪵', text: `Bring wood to the ${logZone.def.name} square`, pos: padPos(logZone) });
-    if (logZone && woodpile.count > 0) tips.push({ key: 'woodpile', icon: '🪵', text: 'Grab wood from your wood storage', pos: woodpile.pos.clone() });
-    if (counter.built && logs > logsNeeded()) tips.push({ key: 'spareWood', icon: '🪵', text: 'Spare wood? Stand still at the SELL TABLE to sell it for $1 each', pos: counter.pos.clone() });
+    if (logZone && logs > 0) tips.push({ key: 'build', icon: '🪵', text: tr('tip.build', { name: tName(logZone.def.name) }), pos: padPos(logZone) });
+    if (logZone && woodpile.count > 0) tips.push({ key: 'woodpile', icon: '🪵', text: tr('tip.woodpile'), pos: woodpile.pos.clone() });
+    if (counter.built && logs > logsNeeded()) tips.push({ key: 'spareWood', icon: '🪵', text: tr('tip.spareWood'), pos: counter.pos.clone() });
 
     const next = cashPads.sort(byLeft)[0];
-    if (next && counter.built) tips.push({ key: 'hunt', info: 10, icon: '🐻', text: `Hunt bears for meat and sell it to afford the ${padName(next)}` });
-    if (!next && !logZone) tips.push({ key: 'complete', info: 6, icon: '🏆', text: 'Your camp is complete! Survive the waves.' });
+    if (next && counter.built) tips.push({ key: 'hunt', info: 10, icon: '🐻', text: tr('tip.hunt', { name: padName(next) }) });
+    if (!next && !logZone) tips.push({ key: 'complete', info: 6, icon: '🏆', text: tr('tip.complete') });
 
     return tips.find((t) => !learned.has(t.key)) || null;
   }
 
   // Small labels on each station. The "what it does" line goes away once that action is learned.
   const stationLabels = [];
-  function stationLabel(html, getPos, visible, learnKey) {
+  // text = locale key (station.*), re-rendered when the language changes
+  const stationHtml = (s) => tr(s.key, { price: SMOKER.price });
+  function stationLabel(key, getPos, visible, learnKey) {
     const el = document.createElement('div');
     el.className = 'label station-label';
-    el.innerHTML = html;
     labelsEl.appendChild(el);
-    stationLabels.push({ el, getPos, visible, learnKey });
+    const s = { el, key, getPos, visible, learnKey };
+    el.innerHTML = stationHtml(s);
+    stationLabels.push(s);
   }
-  stationLabel('SELL TABLE<small>meat & spare wood → 💵</small>', () => counter.pos.clone().setY(2.6), () => counter.built, 'sell');
-  stationLabel('💵 PICK UP', () => new THREE.Vector3(counter.pos.x + 1.5, 1.4, counter.pos.z + 0.3), () => counter.built && counter.pile.length > 0 && !learned.has('cash'));
-  stationLabel('GRILL<small>raw meat → $12 steak</small>', () => grill.pos.clone().setY(1.3).setZ(grill.pos.z + 0.6), () => grill.built, 'grill');
-  stationLabel(`SMOKEHOUSE<small>2× faster · $${SMOKER.price} smoked meat</small>`, () => smoker.pos.clone().setY(2.6), () => smoker.built, 'smoker');
-  stationLabel('WOOD STORAGE<small>your lumberjack fills it</small>', () => woodpile.pos.clone().setY(1.9), () => woodpile.built, 'woodpile');
+  stationLabel('station.sell', () => counter.pos.clone().setY(2.6), () => counter.built, 'sell');
+  stationLabel('station.pickUp', () => new THREE.Vector3(counter.pos.x + 1.5, 1.4, counter.pos.z + 0.3), () => counter.built && counter.pile.length > 0 && !learned.has('cash'));
+  stationLabel('station.grill', () => grill.pos.clone().setY(1.3).setZ(grill.pos.z + 0.6), () => grill.built, 'grill');
+  stationLabel('station.smoker', () => smoker.pos.clone().setY(2.6), () => smoker.built, 'smoker');
+  stationLabel('station.woodpile', () => woodpile.pos.clone().setY(1.9), () => woodpile.built, 'woodpile');
+
+  // language changed: redraw every text that isn't rebuilt each frame
+  function relabel() {
+    for (const s of stationLabels) s.el.innerHTML = stationHtml(s);
+    for (const z of [...zones, ...upgrades]) if (z.label) refreshLabel(z);
+    goalT = 0; // the bottom tip is recomputed (in the new language) on the next update
+  }
 
   let infoShown = 0;
   function updateGuidance(dt) {
@@ -2116,7 +2127,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       }
       if (target && stackFree(P.c) <= 0) {
         P.maxMsgT -= dt;
-        if (P.maxMsgT <= 0) { fx.text(P.pos.clone().setY(2.8), 'MAX', 'warn'); sfx.play('full'); P.maxMsgT = 1.2; }
+        if (P.maxMsgT <= 0) { fx.text(P.pos.clone().setY(2.8), tr('fx.max'), 'warn'); sfx.play('full'); P.maxMsgT = 1.2; }
         target = null;
       }
     }
@@ -2281,11 +2292,11 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       }
     }
     const aliveBears = bears.filter((b) => !b.dying).length;
-    hud.setWave(aliveBears > 0 ? `WAVE ${waves.n} · ${aliveBears} 🐻` : `WAVE ${waves.n + 1} IN ${Math.ceil(waves.timer)}s`, 1 - waves.timer / waves.total);
+    hud.setWave(aliveBears > 0 ? tr('hud.wave', { n: waves.n, bears: aliveBears }) : tr('hud.nextWave', { n: waves.n + 1, s: Math.ceil(waves.timer) }), 1 - waves.timer / waves.total);
     // boss bar: all bosses alive, armor counted as extra health
     const bossesAlive = bears.filter((b) => b.boss && !b.dying);
     if (bossesAlive.length) {
-      const names = [...new Set(bossesAlive.map((b) => b.def.name))];
+      const names = [...new Set(bossesAlive.map((b) => tName(b.def.name)))];
       const cur = bossesAlive.reduce((s, b) => s + b.hp + b.armor, 0);
       const max = bossesAlive.reduce((s, b) => s + b.maxHp + b.maxArmor, 0);
       hud.setBoss(names.join(' + ') + (bossesAlive.length > names.length ? ` ×${bossesAlive.length}` : ''), cur / max);
@@ -2343,7 +2354,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
   layoutStack(player.c);
 
   return {
-    update, retry, player, events, stats, auto, helpers, grill, woodpile, loaded, resetSave,
+    update, retry, player, events, stats, auto, helpers, grill, woodpile, loaded, resetSave, relabel,
     get cash() { return cash; },
     set cash(v) { setCash(v); },
     get wave() { return waves.n; },

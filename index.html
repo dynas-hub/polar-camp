@@ -19,6 +19,7 @@
   </script>
 </head>
 <body>
+  <!-- All visible texts come from src/locales/<lang>.json (data-i18n keys); the English here is only what shows while loading. -->
   <div id="stage">
     <canvas id="game"></canvas>
     <div id="labels"></div>
@@ -29,7 +30,7 @@
     </div>
 
     <div id="wave">
-      <div id="wave-title">WAVE 1</div>
+      <div id="wave-title"></div>
       <div id="wave-bar"><div id="wave-fill"></div></div>
       <div id="boss" class="hidden">
         <div id="boss-name"></div>
@@ -39,8 +40,9 @@
 
     <div id="poison" class="hidden"></div>
 
-    <button id="help-btn" aria-label="How to play">?</button>
-    <button id="sound-btn" aria-label="Sound on/off">🔊</button>
+    <button id="help-btn" aria-label="How to play" data-i18n-aria="aria.help">?</button>
+    <button id="sound-btn" aria-label="Sound on/off" data-i18n-aria="aria.sound">🔊</button>
+    <button id="options-btn" aria-label="Options" data-i18n-aria="aria.options">⚙️</button>
 
     <div id="hint" class="hidden"><span id="hint-ico"></span><span id="hint-text"></span></div>
 
@@ -53,51 +55,66 @@
 
     <div id="defeat" class="hidden">
       <div class="defeat-card">
-        <div class="defeat-title">DEFEAT</div>
-        <div class="defeat-sub">The bears got you.</div>
-        <button id="retry">TRY AGAIN</button>
+        <div class="defeat-title" data-i18n="defeat.title">DEFEAT</div>
+        <div class="defeat-sub" data-i18n="defeat.sub">The bears got you.</div>
+        <button id="retry" data-i18n="defeat.retry">TRY AGAIN</button>
       </div>
     </div>
 
     <div id="title-screen">
+      <button id="lang-link" class="link"><span id="lang-link-flag" class="flag"></span><span id="lang-link-name">English</span></button>
       <div class="logo">POLAR<br>CAMP</div>
-      <div class="tag">Build your camp. Survive the bears.</div>
+      <div class="tag" data-i18n="title.tag">Build your camp. Survive the bears.</div>
       <div class="loop">
-        <div><span>🌲</span>Chop</div><i>›</i>
-        <div><span>🏗️</span>Build</div><i>›</i>
-        <div><span>🐻</span>Fight</div><i>›</i>
-        <div><span>💵</span>Sell</div>
+        <div><span>🌲</span><b data-i18n="title.chop">Chop</b></div><i>›</i>
+        <div><span>🏗️</span><b data-i18n="title.build">Build</b></div><i>›</i>
+        <div><span>🐻</span><b data-i18n="title.fight">Fight</b></div><i>›</i>
+        <div><span>💵</span><b data-i18n="title.sell">Sell</b></div>
       </div>
-      <button id="play">PLAY</button>
-      <button id="how" class="secondary">HOW TO PLAY</button>
-      <button id="new-game" class="link hidden">Start a new game</button>
-      <div class="hint">Drag anywhere to move · WASD on a computer</div>
+      <button id="play" data-i18n="title.play">PLAY</button>
+      <button id="how" class="secondary" data-i18n="title.how">HOW TO PLAY</button>
+      <button id="new-game" class="link hidden" data-i18n="title.newGame">Start a new game</button>
+      <div class="hint" data-i18n="title.hint">Drag anywhere to move · WASD on a computer</div>
     </div>
 
-    <div id="help" class="hidden" role="dialog" aria-label="How to play">
-      <div class="help-card">
-        <div class="help-title">HOW TO PLAY</div>
-        <div class="help-list">
-          <div class="row"><span>🕹️</span><div><b>Move</b>Drag anywhere on the screen (WASD or arrows on a computer).</div></div>
-          <div class="row"><span>🌲</span><div><b>Chop</b>Walk next to a tree. The wood stacks up on your back.</div></div>
-          <div class="row"><span>⬜</span><div><b>Build</b>Dashed squares show a price in 🪵 wood or 💵 cash. Stand on one to pay, bit by bit.</div></div>
-          <div class="row"><span>🐻</span><div><b>Fight</b>Bears attack in waves. Stand close to hit them automatically. Towers shoot them for you.</div></div>
-          <div class="row"><span>🥩</span><div><b>Sell</b>Bring meat to the SELL TABLE, then grab the 💵 cash pile next to it. Spare wood (not needed for building or repairs) sells for $1: stand still at the table.</div></div>
-          <div class="row"><span>🔥</span><div><b>Grill</b>Raw meat sells for $5. Grill it first: a steak sells for $12.</div></div>
-          <div class="row"><span>👷</span><div><b>Workers</b>Hire a lumberjack, a hunter and a cashier to run the camp for you. They carry 30% of what your bag holds, so upgrading your bag upgrades them too.</div></div>
-          <div class="row"><span>⬆️</span><div><b>Upgrades</b>Endless levels. AXE hits harder (+12% per level, compounding) and cuts more wood per hit. BAG carries more and makes selling faster.</div></div>
-          <div class="row"><span>🔥</span><div><b>Campfire</b>Heals you fast and cures poison. Once you're fully healed, it goes pale and recharges for 5 seconds.</div></div>
-          <div class="row"><span>🧱</span><div><b>Walls</b>Close all 4 sides (gates north and south). Bears chew on walls: repair them with wood on their REPAIR square.</div></div>
-          <div class="row"><span>🏕️</span><div><b>Expansion</b>Behind the south wall: lay the foundations (wood), then expand the camp (cash). The annex has its own walls, 2 more workers, a SMOKEHOUSE (2× faster, $20 smoked meat) and 2 more tower spots.</div></div>
-          <div class="row"><span>👑</span><div><b>Bosses</b>A boss comes every 3 waves and drops a bag of cash. Later they come in pairs.</div></div>
-          <div class="row"><span>🛡️</span><div><b>Armored bear</b>Arrows bounce off. Break its plates with your axe, then bring the plates to the ARMOR square to forge your own armor.</div></div>
-          <div class="row"><span>🤢</span><div><b>Poison bear</b>Its bite poisons you until you die, unless you reach the campfire, which cures it. Step back when it dies. It drops a poison vial.</div></div>
-          <div class="row"><span>🪵</span><div><b>Log thrower</b>It breaks your walls from afar: go out and hit it. Repair walls with wood on their REPAIR square.</div></div>
-          <div class="row"><span>🌟</span><div><b>Ballista</b>The log thrower drops heartwood. Heartwood + 20 wood + $250 turns an arrow tower into a ballista: 12 m reach, 9 damage, bolts that crack armor. Bears and thrown logs can destroy it: it drops its heartwood back so you can rebuild.</div></div>
-          <div class="row"><span>🧪</span><div><b>Poison bolts</b>A poison vial + 15 wood + $150 gives a ballista poison bolts: bears it hits lose 2 hp per second for 5 seconds.</div></div>
+    <!-- first launch only: the signpost language picker (concept A, owner's pick 2026-09-29) -->
+    <div id="lang-screen" class="hidden">
+      <div class="logo">POLAR<br>CAMP</div>
+      <div class="ask" data-i18n="lang.ask">Choose your language</div>
+      <div class="post">
+        <button class="plank" data-lang="en"><span class="snowcap"></span><span class="nail"></span><span>English</span><span class="code">EN</span></button>
+        <button class="plank left" data-lang="fr"><span class="snowcap"></span><span class="code">FR</span><span>Français</span><span class="nail"></span></button>
+        <button class="plank" data-lang="es"><span class="snowcap"></span><span class="nail"></span><span>Español</span><span class="code">ES</span></button>
+      </div>
+      <button id="lang-go" data-i18n="lang.go">CONTINUE</button>
+    </div>
+
+    <div id="options" class="hidden" role="dialog" aria-label="Options">
+      <div class="opt-card">
+        <div class="opt-title" data-i18n="options.title">OPTIONS</div>
+        <div class="opt-row"><span data-i18n="options.language">Language</span>
+          <div class="seg" id="opt-lang">
+            <button data-lang="en"><span class="flag" data-flag="en"></span>EN</button>
+            <button data-lang="fr"><span class="flag" data-flag="fr"></span>FR</button>
+            <button data-lang="es"><span class="flag" data-flag="es"></span>ES</button>
+          </div>
         </div>
-        <div class="help-tip">💡 Stuck? Follow the <b>yellow arrow</b> and the tip at the bottom of the screen. Your progress saves automatically.</div>
-        <button id="help-close">GOT IT</button>
+        <div class="opt-row"><span data-i18n="options.sound">Sound</span>
+          <div class="seg" id="opt-sound">
+            <button data-sound="on" data-i18n="options.on">ON</button>
+            <button data-sound="off" data-i18n="options.off">OFF</button>
+          </div>
+        </div>
+        <button id="options-close" data-i18n="options.done">DONE</button>
+      </div>
+    </div>
+
+    <div id="help" class="hidden" role="dialog" aria-label="How to play" data-i18n-aria="aria.help">
+      <div class="help-card">
+        <div class="help-title" data-i18n="help.title">HOW TO PLAY</div>
+        <div class="help-list" id="help-list"><!-- rows built in main.js from the locale --></div>
+        <div class="help-tip" data-i18n-html="help.tip"></div>
+        <button id="help-close" data-i18n="help.close">GOT IT</button>
       </div>
     </div>
   </div>
