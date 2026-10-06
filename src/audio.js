@@ -1,4 +1,5 @@
-// Sound effects, all synthesized with the Web Audio API (no audio files, nothing to license).
+// Sound effects, synthesized with the Web Audio API, plus a few recorded ones from ElevenLabs
+// (src/sounds/, see SAMPLES): until a file has loaded, its synthesized version plays instead.
 // sfx.play('chop', { at }) — `at` (a Vector3) fades the sound with distance from the listener.
 // Phones only allow audio after a tap: sfx.unlock() runs on the first touch/click/key.
 
@@ -7,11 +8,20 @@ const MUTE_KEY = 'polarcamp-muted';
 // Minimum seconds between two plays of the same sound (rapid events would turn into noise).
 const THROTTLE = {
   pop: 0.05, coin: 0.04, place: 0.05, sell: 0.07, arrow: 0.08, bolt: 0.1, hit: 0.03, chop: 0.05,
-  sizzle: 0.5, poison: 0.3, crack: 0.1, hammer: 0.08, tink: 0.08, block: 0.06, hurt: 0.12, full: 1.2, whoosh: 0.15,
+  sizzle: 0.5, poison: 0.3, crack: 0.1, hammer: 0.08, tink: 0.08, block: 0.06, hurt: 0.12, full: 1.2, whoosh: 0.15, iceShatter: 0.1, kingRoar: 1,
+};
+
+// ElevenLabs sound effects (owner-approved, 2026-10-06): name → [file, volume]
+const SAMPLES = {
+  kingRoar: ['king-roar.mp3', 0.9],
+  slam: ['king-slam.mp3', 1],
+  iceShatter: ['ice-shatter.mp3', 2.2],
+  victory: ['victory.mp3', 0.8],
 };
 
 export function createAudio() {
   let ctx = null, master = null, noiseBuf = null, primed = false;
+  const buffers = {}; // decoded SAMPLES
   let muted = false;
   try { muted = localStorage.getItem(MUTE_KEY) === '1'; } catch { /* ignore */ }
   const last = {};
@@ -39,7 +49,24 @@ export function createAudio() {
     noiseBuf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
     const d = noiseBuf.getChannelData(0);
     for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    for (const [name, [file]] of Object.entries(SAMPLES)) {
+      fetch(new URL(`./sounds/${file}`, import.meta.url))
+        .then((r) => r.arrayBuffer())
+        .then((a) => new Promise((ok, fail) => ctx.decodeAudioData(a, ok, fail)))
+        .then((b) => { buffers[name] = b; })
+        .catch(() => { /* keep the synthesized version */ });
+    }
   }
+
+  function sample(name, k) {
+    const t = tBase ?? ctx.currentTime;
+    const src = ctx.createBufferSource(), g = ctx.createGain();
+    src.buffer = buffers[name];
+    g.gain.value = SAMPLES[name][1] * k;
+    src.connect(g).connect(master);
+    src.start(t);
+  }
+  const playNow = (name, k) => (buffers[name] ? sample(name, k) : SOUNDS[name](k));
 
   // --- building blocks ---
   function env(g, t, vol, attack, dur) {
@@ -108,6 +135,19 @@ export function createAudio() {
     defeat(k) { tone({ freq: 330, to: 80, type: 'sawtooth', vol: 0.15, dur: 1.1, gain: k }); tone({ freq: 247, to: 60, type: 'triangle', vol: 0.15, dur: 1.2, delay: 0.1, gain: k }); },
     click(k) { tone({ freq: 720, vol: 0.12, dur: 0.03, gain: k }); },
     full(k) { tone({ freq: 200, type: 'square', vol: 0.08, dur: 0.07, gain: k }); tone({ freq: 170, type: 'square', vol: 0.08, dur: 0.07, delay: 0.09, gain: k }); },
+    // Bear King (world 1 final boss) and the end of the map
+    kingRoar(k) {
+      tone({ freq: 95, to: 60, type: 'sawtooth', vol: 0.22, dur: 1.3, attack: 0.15, gain: k });
+      tone({ freq: 142, to: 85, type: 'sawtooth', vol: 0.14, dur: 1.2, attack: 0.15, gain: k });
+      noise({ filter: 'lowpass', freq: 700, to: 200, vol: 0.45, dur: 1.3, attack: 0.12, gain: k });
+    },
+    slamWarn(k) { noise({ freq: 300, to: 900, q: 2, vol: 0.18, dur: 0.9, attack: 0.6, gain: k }); tone({ freq: 70, to: 110, type: 'triangle', vol: 0.15, dur: 0.9, attack: 0.5, gain: k }); },
+    slam(k) { tone({ freq: 90, to: 30, vol: 0.6, dur: 0.5, gain: k }); noise({ filter: 'lowpass', freq: 1400, to: 100, vol: 0.6, dur: 0.7, gain: k }); for (let i = 0; i < 4; i++) noise({ freq: rnd(2500, 4000), q: 4, vol: 0.12, dur: 0.06, delay: 0.05 + i * 0.07, gain: k }); },
+    iceShatter(k) { noise({ filter: 'highpass', freq: 3000, vol: 0.3, dur: 0.25, gain: k }); for (let i = 0; i < 5; i++) tone({ freq: rnd(2200, 3800), vol: 0.06, dur: 0.1, delay: i * 0.04, gain: k }); },
+    victory(k) {
+      [523, 659, 784, 1047].forEach((f, i) => tone({ freq: f, type: 'square', vol: 0.1, dur: 0.16, delay: i * 0.12, gain: k }));
+      [784, 1047, 1319].forEach((f) => tone({ freq: f, type: 'triangle', vol: 0.14, dur: 1.2, delay: 0.55, gain: k }));
+    },
   };
 
   return {
@@ -146,7 +186,7 @@ export function createAudio() {
       }
       last[name] = now;
       if (capture) capture.push({ name, t: now, k });
-      else SOUNDS[name](k);
+      else playNow(name, k);
     },
 
     // --- offline filming ---
@@ -171,7 +211,7 @@ export function createAudio() {
       const nd = noiseBuf.getChannelData(0);
       for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
       try {
-        for (const e of events) { if (e.t < duration) { tBase = e.t; SOUNDS[e.name](e.k); } }
+        for (const e of events) { if (e.t < duration) { tBase = e.t; playNow(e.name, e.k); } }
       } finally {
         tBase = null;
         ({ ctx, master, noiseBuf } = saved);

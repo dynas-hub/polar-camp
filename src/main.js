@@ -1,4 +1,4 @@
-// Polar Camp: bootstrap, renderer, camera, HUD glue, main loop.
+// Bear Camp (was Polar Camp): bootstrap, renderer, camera, HUD glue, main loop.
 // URL flags: ?shorts=1 (9:16 frame on desktop) · ?auto=1 (autopilot plays by itself) · ?reset=1 (new game)
 import * as THREE from 'three';
 import { createInput } from './input.js';
@@ -56,6 +56,14 @@ const hud = {
   setHp(f) { $('hp-fill').style.width = `${f * 100}%`; },
   banner(text) { const b = $('banner'); b.textContent = text; b.classList.remove('show'); void b.offsetWidth; b.classList.add('show'); },
   defeat(show) { $('defeat').classList.toggle('hidden', !show); input.setEnabled(!show); },
+  // the map is won: victory screen → world map → keep playing (endless)
+  victory({ waves }) {
+    $('victory-stats').textContent = t('victory.stats', { n: waves });
+    $('victory').classList.remove('hidden');
+    sfx.play('victory');
+    if (game.auto.on) { setTimeout(openMap, 3000); return; } // autopilot footage keeps rolling
+    pause(true);
+  },
   flashHurt() { stage.animate([{ boxShadow: 'inset 0 0 80px rgba(255,40,40,.6)' }, { boxShadow: 'inset 0 0 0 rgba(255,40,40,0)' }], 300); },
   setArmor(f, show) { $('armor-bar').classList.toggle('hidden', !show); $('armor-fill').style.width = `${f * 100}%`; },
   setPoison(on) { $('poison').classList.toggle('hidden', !on); },
@@ -101,6 +109,22 @@ const game = createGame({ scene, camera, fx, input, hud, labelsEl, useSave: !par
 const recorder = createRecorder(stage, canvas, () => renderer.render(scene, camera));
 
 $('retry').addEventListener('click', () => game.retry());
+
+// ---------- World map (opens after the victory, then from the 🗺️ button) ----------
+function openMap() {
+  $('victory').classList.add('hidden');
+  $('worldmap').classList.remove('hidden');
+  if (game.auto.on) { setTimeout(closeMap, 3000); return; }
+  pause(true);
+}
+function closeMap() {
+  $('worldmap').classList.add('hidden');
+  if (!params.has('auto')) $('map-btn').classList.toggle('hidden', !game.won);
+  pause(false);
+}
+$('victory-map').addEventListener('click', () => { sfx.play('click'); openMap(); });
+$('map-play').addEventListener('click', () => { sfx.play('click'); closeMap(); });
+$('map-btn').addEventListener('click', () => { sfx.play('click'); openMap(); });
 
 // ---------- Title screen & How to play ----------
 let started = false;
@@ -194,6 +218,7 @@ function startGame() {
   document.body.classList.add('playing');
   started = true;
   input.setEnabled(true);
+  $('map-btn').classList.toggle('hidden', !game.won);
   // first time ever: show the rules once before the first wave
   if (!store.get('polarcamp-seen-help')) openHelp();
 }

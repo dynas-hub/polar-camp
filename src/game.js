@@ -1,101 +1,33 @@
-// Core gameplay: player, trees, bears, stacking, build zones, towers, selling, waves,
-// grill, hired workers, save/load.
+// Core gameplay: player, trees, stacking, build zones, towers, selling, grill, hired workers.
+// Split out: scenery.js (map), bears.js (bears + bosses), waves.js (wave rules), save.js.
 import * as THREE from 'three';
 import {
-  CAMP_HALF, PLAYER, TREE, BEAR, BOSSES, POISON, WALL, ARMOR, WAVES, TOWER, BALLISTA, ECONOMY, ZONES, UPGRADES, HELPERS, WOODPILE,
-  WALLS, ANNEX_END, WORKERS, SMOKER,
+  CAMP_HALF, PLAYER, TREE, POISON, WALL, ARMOR, TOWER, BALLISTA, ECONOMY, ZONES, UPGRADES, HELPERS, WOODPILE,
+  WALLS, ANNEX_END, WORKERS, SMOKER, WORLD, WAVES,
 } from './config.js';
 import * as Models from './models.js';
 import { t as tr, tName } from './i18n.js';
+import { lerpAngle, easeOutBack, dist2d } from './util.js';
+import { buildScenery } from './scenery.js';
+import { createBears } from './bears.js';
+import { createWaves } from './waves.js';
+import { createSave, SAVE_KEY } from './save.js';
 
 const V = () => new THREE.Vector3();
 const tmpA = V(), tmpB = V();
 const SPAWN = new THREE.Vector3(0, 0, 2);
 const IDLE_HUNTER = new THREE.Vector3(-1.5, 0, 4);
 const WORLD_R = 38;
-const SAVE_KEY = 'polarcamp-save-v1';
-
-function rng(seed) {
-  return () => {
-    seed |= 0; seed = (seed + 0x6d2b79f5) | 0;
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-const lerpAngle = (a, b, t) => {
-  let d = ((b - a + Math.PI) % (Math.PI * 2)) - Math.PI;
-  if (d < -Math.PI) d += Math.PI * 2;
-  return a + d * t;
-};
-
-const easeOutBack = (t) => {
-  const c1 = 1.70158, c3 = c1 + 1;
-  return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
-};
-
-const dist2d = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
 
 const NO_SFX = { play() {}, setListener() {} };
 
 export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = true, sfx = NO_SFX, saveKey = SAVE_KEY }) {
   // ---------- World ----------
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), Models.M.snow);
-  ground.rotation.x = -Math.PI / 2;
-  ground.receiveShadow = true;
-  scene.add(ground);
-  scene.add(Models.makeCampFloor());
-
   const colliders = []; // AABBs {minX,maxX,minZ,maxZ}
   const wallColliders = []; // subset used for path planning
   const circles = [];   // static round obstacles {x,z,r}
   const addBox = (x, z, hw, hd) => colliders.push({ minX: x - hw, maxX: x + hw, minZ: z - hd, maxZ: z + hd });
-
-  const campfire = Models.makeCampfire();
-  campfire.position.set(0, 0.12, -1);
-  scene.add(campfire); // decoration: you can walk right over it
-  // own flame materials so they can fade while the fire recharges (the grill shares the originals)
-  campfire.userData.flames.forEach((f) => { f.material = f.material.clone(); f.material.transparent = true; });
-
-  const tent = Models.makeTent();
-  tent.position.set(-3.25, 0.12, 0.4);
-  scene.add(tent);
-  addBox(tent.position.x, tent.position.z, 0.95, 0.95);
-
-  const rand = rng(7);
-  const trees = [];
-  let guard = 0;
-  while (trees.length < TREE.count && guard++ < 5000) {
-    const a = rand() * Math.PI * 2;
-    const d = TREE.minDist + Math.sqrt(rand()) * (TREE.maxDist - TREE.minDist);
-    const x = Math.cos(a) * d, z = Math.sin(a) * d;
-    // no trees on the camp or on the land kept for the expansion (south of the camp)
-    if (Math.abs(x) < CAMP_HALF + 2.5 && z > -CAMP_HALF - 2.5 && z < ANNEX_END + 2.5) continue;
-    // keep the camp's outer corners clear: workers walk around the walls through them
-    const C = CAMP_HALF + 1.3;
-    if (Math.abs(Math.abs(x) - C) < 2.5 && (Math.abs(Math.abs(z) - C) < 2.5 || Math.abs(z - (ANNEX_END + 1.3)) < 2.5)) continue;
-    if (trees.some((t) => Math.hypot(t.x - x, t.z - z) < TREE.spacing)) continue;
-    const obj = Models.makeTree();
-    const s = 0.85 + rand() * 0.35;
-    obj.scale.setScalar(s);
-    obj.position.set(x, 0, z);
-    obj.rotation.y = rand() * 6;
-    const stump = Models.makeStump();
-    stump.position.set(x, 0, z);
-    stump.visible = false;
-    scene.add(obj, stump);
-    trees.push({ obj, stump, x, z, s, hp: TREE.hp, alive: true, regrow: 0, shake: 0, grow: 1, claim: null });
-  }
-  for (let i = 0; i < 26; i++) {
-    const a = rand() * Math.PI * 2, d = 10 + rand() * 30;
-    const x = Math.cos(a) * d, z = Math.sin(a) * d;
-    if (Math.abs(x) < CAMP_HALF + 1.5 && z > -CAMP_HALF - 1.5 && z < ANNEX_END + 1.5) continue;
-    if (trees.some((t) => Math.hypot(t.x - x, t.z - z) < 1.6)) continue;
-    const rock = Models.makeRock(0.7 + rand() * 0.9);
-    rock.position.set(x, 0, z);
-    scene.add(rock);
-  }
+  const { campfire, trees } = buildScenery({ scene, addBox });
 
   let clock = 0;
   const events = [];
@@ -1067,87 +999,12 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     }
   }
 
-  // ---------- Bears ----------
-  const bears = [];
+  // ---------- Bears and bosses (src/bears.js) ----------
   const drops = [];
-
-  const clouds = [];      // poison bear death clouds
-  const thrown = [];      // logs in flight from log throwers
-
-  // kind: 'normal' or a BOSSES key. hpMult scales late waves.
-  // n = the wave it belongs to (normal bears bite harder in later waves)
-  function spawnBear(kind, hpMult = 1, n = waves.n) {
-    const boss = kind !== 'normal';
-    const def = boss ? BOSSES[kind] : BEAR;
-    const a = -Math.PI / 2 + (Math.random() - 0.5) * 2.4; // mostly from the north
-    const obj = Models.makeBear(kind);
-    obj.scale.setScalar(def.scale);
-    const pos = new THREE.Vector3(Math.cos(a) * WAVES.spawnRadius, 0, Math.sin(a) * WAVES.spawnRadius);
-    obj.position.copy(pos);
-    const bar = Models.makeHealthBar(boss ? 1.6 : 1, 0xff4d4d);
-    bar.visible = false;
-    scene.add(obj, bar);
-    let armorBar = null;
-    if (def.armor) { armorBar = Models.makeHealthBar(1.6, 0xb8c7d6); scene.add(armorBar); }
-    const maxHp = Math.round(def.hp * hpMult);
-    const maxArmor = def.armor ? Math.round(def.armor * hpMult) : 0;
-    bears.push({
-      obj, pos, def, kind, boss, hp: maxHp, maxHp, armor: maxArmor, maxArmor, armorBar, hpMult,
-      bite: boss ? def.damage : Math.round(BEAR.damage(Math.max(1, n)) * 10) / 10,
-      attackT: def.attackRate, throwT: def.firstThrow ?? def.throwEvery ?? 0, bubbleT: 0,
-      bar, flash: 0, lunge: 0, walkT: Math.random() * 6, dying: 0, vel: V(),
-    });
-  }
-
-  // `from` is the player's position for axe hits, null for tower shots.
-  // `pierce` = heavy ballista bolt: cracks armor instead of bouncing off.
-  function hurtBear(b, dmg, from, pierce = false) {
-    if (b.dying) return;
-    const at = b.pos.clone().setY(1 * b.def.scale);
-    b.bar.visible = true;
-    if (b.armor > 0) {
-      if (!from && !pierce) {
-        // arrows bounce off the plates
-        fx.burst(at.clone().setY(1.2 * b.def.scale), 0xfff3a0, 4, { speed: 3, up: 2, size: 0.06 });
-        if (Math.random() < 0.35) fx.text(at.clone().setY(2 * b.def.scale), tr('fx.tink'), 'warn', { life: 0.5, rise: 30 });
-        sfx.play('tink', { at: b.pos });
-        return;
-      }
-      // the axe (or a ballista bolt) breaks the armor first
-      b.armor = Math.max(0, b.armor - (from ? dmg : BALLISTA.armorDamage * towerMult()));
-      b.flash = 0.1;
-      fx.burst(at.clone().setY(1.3 * b.def.scale), 0xc9d3dc, 6, { speed: 4, up: 3, size: 0.1 });
-      const left = Math.ceil(b.armor / (b.maxArmor / b.def.plates));
-      const plates = b.obj.userData.plates;
-      sfx.play(plates.length > left ? 'clang' : 'block', { at: b.pos });
-      while (plates.length > left) {
-        const p = plates.pop();
-        const wp = p.getWorldPosition(V());
-        p.parent.remove(p);
-        const fall = b.pos.clone().add(new THREE.Vector3((Math.random() - 0.5) * 3, 0.1, (Math.random() - 0.5) * 3));
-        fx.fly(p, wp, () => fall, { duration: 0.5, arc: 2, onDone: () => {} });
-        fx.text(at.clone().setY(2.3 * b.def.scale), tr(b.armor > 0 ? 'fx.crack' : 'fx.armorBroken'), 'warn', { life: 1, rise: 60 });
-        fx.addShake(0.15);
-      }
-      if (b.armorBar) Models.setHealth(b.armorBar, b.armor / b.maxArmor);
-      return;
-    }
-    b.hp -= dmg;
-    b.flash = 0.12;
-    Models.setHealth(b.bar, b.hp / b.maxHp);
-    if (from) sfx.play('hit', { at: b.pos });
-    fx.burst(at, 0xffffff, 5, { speed: 3, up: 3 });
-    fx.burst(at, 0xe04848, 3, { speed: 3, up: 3, size: 0.09 });
-    fx.text(at.clone().setY(1.8 * b.def.scale), String(dmg), 'hurt', { life: 0.6, rise: 40 });
-    if (from) {
-      tmpA.subVectors(b.pos, from).setY(0).normalize().multiplyScalar(b.boss ? 0.15 : 0.45);
-      b.pos.add(tmpA);
-    }
-    if (b.hp <= 0) {
-      killBear(b);
-      if (from) learn('fight'); // `from` is set only for the player's axe (towers pass null)
-    }
-  }
+  const { bears, clouds, thrown, spawnBear, hurtBear, updateBears } = createBears({
+    scene, camera, fx, sfx, player, walls, towers, wallColliders, events, stats, now: () => clock, wave: () => waves.n,
+    towerMult, learn, dropItem, resolve, damageWall, damageTower, hurtPlayer, poisonPlayer, victory: onVictory,
+  });
 
   // Throw an item out of `from` onto the ground as a pickup (`value` for loot bags).
   function dropItem(type, from, spread = 2.2, value = 0) {
@@ -1162,254 +1019,6 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     });
   }
 
-  function killBear(b) {
-    b.dying = 0.001;
-    b.bar.visible = false;
-    if (b.armorBar) b.armorBar.visible = false;
-    fx.burst(b.pos.clone().setY(0.8), 0xffffff, b.boss ? 30 : 14, { speed: 5, up: 5, size: 0.2 });
-    fx.addShake(b.boss ? 0.5 : 0.12);
-    if (b.boss) {
-      fx.text(b.pos.clone().setY(3), tr('fx.bossDown', { name: tName(b.def.name) }), 'warn', { life: 1.5, rise: 90 });
-      // shockwave: every bear on the map is stunned for a few seconds (time to heal and clean up)
-      const ring = b.pos.clone().setY(0.4);
-      fx.burst(ring, 0xfff3a0, 28, { speed: 12, up: 0.5, size: 0.22, life: 0.6 });
-      for (const o of bears) if (o !== b && !o.dying) o.stunT = WAVES.bossStun;
-      if (bears.some((o) => o.stunT > 0 && !o.dying)) fx.text(b.pos.clone().setY(5.2), tr('fx.shockwave'), 'warn', { life: 1.6, rise: 70 });
-    }
-    sfx.play(b.boss ? 'bossDown' : 'bearDown', { at: b.pos });
-    events.push({ type: 'kill', kind: b.kind, t: clock });
-    stats.kills++;
-    for (let i = 0; i < (b.def.meat || 0); i++) dropItem('meat', b.pos);
-    for (let i = 0; i < (b.def.toxic || 0); i++) dropItem('toxic', b.pos);
-    for (let i = 0; i < (b.def.plateDrops || 0); i++) dropItem('plate', b.pos, 1.6);
-    for (let i = 0; i < (b.def.heartwood || 0); i++) dropItem('heartwood', b.pos, 1.2);
-    for (let i = 0; i < (b.def.vial || 0); i++) dropItem('vial', b.pos, 1.2);
-    if (b.def.cash) dropItem('loot', b.pos, 1, b.def.cash);
-    if (b.kind === 'poison') {
-      // swells, then bursts into a poison cloud: step back!
-      const mesh = Models.makeCloud();
-      mesh.position.copy(b.pos).setY(0.8);
-      mesh.scale.setScalar(0.5);
-      scene.add(mesh);
-      clouds.push({ mesh, pos: b.pos.clone(), t: 0, burst: false });
-      fx.text(b.pos.clone().setY(3.5), tr('fx.stepBack'), 'hurt', { life: 1, rise: 50 });
-    }
-  }
-
-  function updateBears(dt) {
-    const P = player;
-    for (let i = bears.length - 1; i >= 0; i--) {
-      const b = bears[i];
-      const ud = b.obj.userData;
-      if (b.dying) {
-        b.dying += dt;
-        const k = Math.min(1, b.dying / 0.3);
-        b.obj.scale.setScalar(b.def.scale * (1 - k));
-        b.obj.rotation.z = k * 1.2;
-        if (k >= 1) { scene.remove(b.obj, b.bar); if (b.armorBar) scene.remove(b.armorBar); bears.splice(i, 1); }
-        continue;
-      }
-      const toP = tmpA.subVectors(P.pos, b.pos).setY(0);
-      const dist = toP.length();
-      const reach = b.def.radius + PLAYER.radius + 0.35;
-      let moving = false;
-      let faceX = P.pos.x, faceZ = P.pos.z;
-      // stunned by a boss's shockwave: stands still, dizzy (stars), no bite
-      const stunned = b.stunT > 0;
-      if (stunned) {
-        b.stunT -= dt;
-        b.starT = (b.starT || 0) - dt;
-        if (b.starT <= 0) { b.starT = 0.3; fx.burst(b.pos.clone().setY(2 * b.def.scale), 0xfff3a0, 2, { speed: 1.2, up: 1, size: 0.1, life: 0.5 }); }
-      }
-      // Log thrower: lobs logs from range at the closest target (a standing wall or you);
-      // it only comes to bite when you're right next to it.
-      const aim = b.kind === 'thrower' && !stunned && !P.dead && dist > reach + 0.3 ? throwerAim(b) : null;
-      if (aim) {
-        const dA = dist2d(b.pos, aim.point);
-        faceX = aim.point.x; faceZ = aim.point.z;
-        if (dA > b.def.range) {
-          b.vel.set(aim.point.x - b.pos.x, 0, aim.point.z - b.pos.z).normalize().multiplyScalar(b.def.speed);
-          moving = true;
-        } else {
-          b.vel.set(0, 0, 0);
-          b.throwT -= dt;
-          if (b.throwT <= 0) { b.throwT = b.def.throwEvery; b.lunge = 1; throwLog(b, aim); }
-        }
-      } else if (!stunned && !P.dead && dist > reach) {
-        toP.normalize();
-        b.vel.copy(toP).multiplyScalar(b.def.speed);
-        moving = true;
-      } else b.vel.set(0, 0, 0);
-      if (b.kind === 'poison') {
-        b.bubbleT -= dt;
-        if (b.bubbleT <= 0) { b.bubbleT = 0.25; fx.burst(b.pos.clone().setY(1.2 * b.def.scale), 0x9be36b, 1, { speed: 0.5, up: 2.5, size: 0.14, life: 0.7 }); }
-      }
-      // hit by a poison bolt: loses hp every second, armor or not
-      if (b.poisonT > 0) {
-        b.poisonT -= dt;
-        b.poisonAcc = (b.poisonAcc || 0) + dt;
-        if (b.poisonAcc >= 1) {
-          b.poisonAcc -= 1;
-          const tick = Math.round(BALLISTA.poisonDps * towerMult() * 10) / 10;
-          b.hp -= tick;
-          b.bar.visible = true;
-          Models.setHealth(b.bar, b.hp / b.maxHp);
-          fx.burst(b.pos.clone().setY(1.2 * b.def.scale), 0x8fe05a, 4, { speed: 1.5, up: 2.5, size: 0.1 });
-          fx.text(b.pos.clone().setY(2 * b.def.scale), String(tick), 'cash', { life: 0.5, rise: 30 });
-          if (b.hp <= 0) { killBear(b); continue; }
-        }
-      }
-      // separation from other bears
-      for (const o of bears) {
-        if (o === b || o.dying) continue;
-        const dx = b.pos.x - o.pos.x, dz = b.pos.z - o.pos.z;
-        const min = b.def.radius + o.def.radius;
-        const d2 = dx * dx + dz * dz;
-        if (d2 < min * min && d2 > 1e-6) {
-          const d = Math.sqrt(d2), push = (min - d) * 0.5;
-          b.pos.x += (dx / d) * push; b.pos.z += (dz / d) * push;
-        }
-      }
-      b.pos.addScaledVector(b.vel, dt);
-      resolve(b.pos, b.def.radius, false);
-      if (Math.hypot(faceX - b.pos.x, faceZ - b.pos.z) > 0.01) b.obj.rotation.y = lerpAngle(b.obj.rotation.y, Math.atan2(faceX - b.pos.x, faceZ - b.pos.z), Math.min(1, dt * 8));
-
-      // Blocked by a wall on the way to you? It chews on it (small damage, bosses hit harder):
-      // fences wear down and cost wood to keep up.
-      if (!P.dead && dist > reach + 0.1 && moving) {
-        // walls, or a ballista standing in the way
-        const touching = (c) => {
-          const x = THREE.MathUtils.clamp(b.pos.x, c.minX, c.maxX), z = THREE.MathUtils.clamp(b.pos.z, c.minZ, c.maxZ);
-          return Math.hypot(b.pos.x - x, b.pos.z - z) < b.def.radius + 0.12;
-        };
-        const chew = wallColliders.find(touching) || towers.find((t) => t.ballista && touching(t.box))?.box;
-        if (chew) {
-          b.wallT = (b.wallT ?? b.def.attackRate) - dt;
-          if (b.wallT <= 0) {
-            b.wallT = b.def.attackRate * 1.4;
-            b.lunge = 1;
-            // chews as hard as it is tough (the same wave scaling as its hp)
-            const bite = Math.round((b.def.wallHit || 1) * b.hpMult * 10) / 10;
-            if (chew.wall) damageWall(chew.wall, bite);
-            else damageTower(chew.tower, bite);
-          }
-        }
-      }
-
-      if (!stunned && !P.dead && dist <= reach + 0.1) {
-        b.attackT -= dt;
-        if (b.attackT <= 0) {
-          b.attackT = b.def.attackRate;
-          b.lunge = 1;
-          hurtPlayer(b.bite);
-          if (b.kind === 'poison') poisonPlayer(POISON.bite);
-        }
-      } else b.attackT = Math.min(b.attackT, b.def.attackRate * 0.5);
-
-      b.walkT += dt * (moving ? 10 : 0);
-      ud.legs.forEach((l, j) => { l.rotation.x = moving ? Math.sin(b.walkT + (j % 2 ? Math.PI : 0) + (j > 1 ? Math.PI / 2 : 0)) * 0.5 : 0; });
-      ud.body.position.y = moving ? Math.abs(Math.sin(b.walkT)) * 0.06 : 0;
-      b.lunge = Math.max(0, b.lunge - dt * 4);
-      ud.head.position.z = 0.75 + Math.sin(b.lunge * Math.PI) * 0.35;
-      b.flash = Math.max(0, b.flash - dt);
-      b.obj.scale.setScalar(b.def.scale * (1 + b.flash * 1.2));
-      b.obj.position.copy(b.pos);
-      b.bar.position.set(b.pos.x, 2 * b.def.scale, b.pos.z);
-      b.bar.quaternion.copy(camera.quaternion);
-      if (b.armorBar) {
-        b.armorBar.visible = b.armor > 0 && b.bar.visible;
-        b.armorBar.position.set(b.pos.x, 2 * b.def.scale + 0.18, b.pos.z);
-        b.armorBar.quaternion.copy(camera.quaternion);
-      }
-      const held = b.obj.userData.heldLog;
-      if (held) {
-        // the log leaves its paws when thrown, comes back, and is raised overhead right before the next throw
-        held.visible = b.throwT < b.def.throwEvery - 0.5;
-        const windup = Math.max(0, 1 - b.throwT / 0.7);
-        held.position.y = 1.15 + windup * 0.9;
-        held.position.z = 0.65 - windup * 0.5;
-      }
-    }
-    updateThrown(dt);
-    updateClouds(dt);
-  }
-
-  // Closest target: you, or the closest point of a standing wall.
-  function throwerAim(b) {
-    let best = { point: player.pos.clone(), wall: null }, bestD = dist2d(b.pos, player.pos);
-    for (const w of walls) {
-      if (w.broken) continue;
-      for (const c of w.colliders) {
-        const x = THREE.MathUtils.clamp(b.pos.x, c.minX, c.maxX);
-        const z = THREE.MathUtils.clamp(b.pos.z, c.minZ, c.maxZ);
-        const d = Math.hypot(b.pos.x - x, b.pos.z - z);
-        if (d < bestD) { bestD = d; best = { point: new THREE.Vector3(x, 0, z), wall: w }; }
-      }
-    }
-    // ballistas are targets too (plain arrow towers aren't worth a log)
-    for (const t of towers) {
-      if (!t.ballista) continue;
-      const d = Math.hypot(b.pos.x - t.x, b.pos.z - t.z);
-      if (d < bestD) { bestD = d; best = { point: new THREE.Vector3(t.x, 0, t.z), wall: null, tower: t }; }
-    }
-    return best;
-  }
-
-  function throwLog(b, aim) {
-    const mesh = Models.makeLog();
-    mesh.scale.setScalar(1.3);
-    const from = b.pos.clone().setY(1.6 * b.def.scale);
-    // aim at where the player is now (they can dodge), or at the wall
-    const to = aim.point.clone().setY(0.6);
-    mesh.position.copy(from);
-    scene.add(mesh);
-    thrown.push({ mesh, from, to, t: 0, dur: 1.1, wall: aim.wall, tower: aim.tower, dmg: Math.round(b.def.wallDamage * b.hpMult), hit: b.def.hitDamage });
-    sfx.play('whoosh', { at: b.pos });
-  }
-
-  function updateThrown(dt) {
-    for (let i = thrown.length - 1; i >= 0; i--) {
-      const l = thrown[i];
-      l.t += dt / l.dur;
-      const k = Math.min(1, l.t);
-      l.mesh.position.lerpVectors(l.from, l.to, k);
-      l.mesh.position.y += Math.sin(k * Math.PI) * 4;
-      l.mesh.rotation.x += dt * 10;
-      if (k < 1) continue;
-      scene.remove(l.mesh);
-      thrown.splice(i, 1);
-      fx.burst(l.to.clone(), 0xb57a3f, 8, { speed: 4, up: 3, size: 0.12 });
-      if (l.wall && !l.wall.broken) damageWall(l.wall, l.dmg);
-      else if (l.tower && l.tower.ballista) damageTower(l.tower, l.dmg);
-      else if (!player.dead && dist2d(player.pos, l.to) < 1.3) hurtPlayer(l.hit);
-      // half the logs stay on the ground: free wood for repairs
-      if (Math.random() < 0.5) dropItem('log', l.to, 1.2);
-    }
-  }
-
-  function updateClouds(dt) {
-    for (let i = clouds.length - 1; i >= 0; i--) {
-      const c = clouds[i];
-      c.t += dt;
-      if (!c.burst) {
-        // warning: swells and pulses before bursting
-        const k = c.t / POISON.cloudDelay;
-        c.mesh.scale.setScalar(0.5 + k * 1.2 + Math.sin(c.t * 30) * 0.08);
-        if (c.t >= POISON.cloudDelay) {
-          c.burst = true;
-          fx.burst(c.pos.clone().setY(0.8), 0x8fe05a, 26, { speed: 6, up: 3, size: 0.25, life: 0.8 });
-          fx.addShake(0.25);
-          sfx.play('burst', { at: c.pos });
-          if (!player.dead && dist2d(player.pos, c.pos) < POISON.cloudRadius) poisonPlayer(POISON.cloud);
-        }
-      } else {
-        const k = (c.t - POISON.cloudDelay) / 1;
-        c.mesh.scale.setScalar(POISON.cloudRadius * (0.7 + k * 0.3));
-        c.mesh.material.opacity = 0.35 * (1 - k);
-        if (k >= 1) { scene.remove(c.mesh); clouds.splice(i, 1); }
-      }
-    }
-  }
 
   // Poison: short damage over time that ignores armor; the campfire cures it.
   function poisonPlayer(seconds) {
@@ -1501,7 +1110,6 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
   //  - BALLISTA (arrow tower → ballista): heartwood + logs + cash, once you've found heartwood
   //  - POISON BOLTS (ballista → poison ballista): poison vial + logs + cash, once you've found a vial
   const ITEM_ICON = { heartwood: '🌟', vial: '🧪', logs: '🪵', cash: '💵' };
-  const SPECIALS = ['heartwood', 'vial', 'plate']; // rare boss items, saved wherever they are
   const pendingUps = {}; // tower upgrade payments restored from the save
   const upgradeFor = (t) => {
     if (!t.ballista && built.has('firstHeartwood')) return { kind: 'ballista', name: 'BALLISTA', cost: BALLISTA.cost };
@@ -1720,31 +1328,18 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     }
   }
 
-  // ---------- Waves ----------
-  const waves = { n: 0, timer: WAVES.firstDelay, total: WAVES.firstDelay, queue: [], gap: 0 };
+  // ---------- Waves (src/waves.js) ----------
+  const { waves, updateWaves } = createWaves({ hud, fx, sfx, events, now: () => clock, save: () => save(), bears, spawnBear });
 
-  function startWave() {
-    waves.n++;
-    const n = waves.n;
-    const count = WAVES.countFor(n);
-    const hpMult = WAVES.hpScale(n);
-    for (let i = 0; i < count; i++) waves.queue.push({ kind: 'normal', hpMult, n });
-    // bosses arrive after the first regular bears
-    const bosses = WAVES.bossesFor(n);
-    bosses.forEach((kind, i) => waves.queue.splice(Math.min(waves.queue.length, 2 + i * 3), 0, { kind, hpMult: WAVES.bossScale(n), n }));
-    if (bosses.length) {
-      const names = [...new Set(bosses)].map((k) => {
-        const c = bosses.filter((x) => x === k).length;
-        return tName(BOSSES[k].name) + (c > 1 ? ` ×${c}` : '');
-      });
-      hud.banner(`⚠ ${names.join(' + ')}!`);
-      fx.addShake(0.4);
-      sfx.play('bossHorn');
-      events.push({ type: 'boss', kinds: bosses, n, t: clock });
-    } else { hud.banner(tr('banner.wave', { n })); sfx.play('horn'); }
-    fx.addShake(0.2);
-    events.push({ type: 'wave', n: waves.n, t: clock });
+  // ---------- Map won (the Bear King is down) ----------
+  // The waves go on (endless mode); the victory screen shows once his shockwave has played out.
+  let victoryT = 0;
+  function onVictory() {
+    waves.won = true;
+    waves.kingDue = false;
     waves.timer = waves.total = WAVES.interval;
+    victoryT = 2.5;
+    events.push({ type: 'victory', wave: waves.n, t: clock });
     save();
   }
 
@@ -1791,6 +1386,30 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     // hurt: fall back under the towers until healed
     // poison never wears off: the campfire comes before everything else
     if (player.poisonT > 0) return CAMPFIRE.clone();
+    // the King's red ring: step out before the slam lands
+    const slammer = bears.find((b) => b.slamRing && !b.dying);
+    if (slammer) {
+      const r = slammer.slamRing.position, out = slammer.def.slamRadius + 1.2;
+      if (dist2d(p, r) < out) {
+        const dx = p.x - r.x, dz = p.z - r.z, l = Math.hypot(dx, dz) || 1;
+        return new THREE.Vector3(r.x + (dx / l) * out, 0, r.z + (dz / l) * out);
+      }
+    }
+    // the Bear King hits too hard to trade blows with: below 40% hp, run circles away from him
+    // (towers keep shooting) until regen brings you back to 90%, like a player would
+    const king = bears.find((b) => b.kind === 'king' && !b.dying);
+    if (!king || player.hp >= PLAYER.maxHp * 0.9) auto.kite = false;
+    else if (player.hp < PLAYER.maxHp * 0.4) auto.kite = true;
+    if (auto.kite) {
+      let dx = p.x - king.pos.x, dz = p.z - king.pos.z;
+      const l = Math.hypot(dx, dz) || 1;
+      dx /= l; dz /= l;
+      // sidestep along a circle around him so you never run into the edge of the map
+      const goal = new THREE.Vector3(king.pos.x + (dx - dz * 0.8) * 9, 0, king.pos.z + (dz + dx * 0.8) * 9);
+      const r = Math.hypot(goal.x, goal.z);
+      if (r > WORLD_R - 3) goal.multiplyScalar((WORLD_R - 3) / r);
+      return goal;
+    }
     if (player.hp < PLAYER.maxHp * 0.45 && bearDist < 7) return new THREE.Vector3(0, 0, 3.1);
     if (bearDist < 5) return nearestBear.pos;
     // the log thrower stays out of tower range: go get it
@@ -1848,70 +1467,13 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     return logZone ? new THREE.Vector3(logZone.def.x, 0, logZone.def.z) : null;
   }
 
-  // ---------- Save / load ----------
-  function save() {
-    if (!useSave || auto.used) return; // autopilot runs are for footage; never overwrite the player's save
-    try {
-      localStorage.setItem(saveKey, JSON.stringify({
-        v: 1, cash, built: [...built], levels, wave: waves.n, woodpile: woodpile.count,
-        walls: Object.fromEntries(walls.map((w) => [w.side, Math.round(w.hp)])),
-        ballistas: towers.filter((t) => t.ballista).map((t) => t.id),
-        poisonBallistas: towers.filter((t) => t.poison).map((t) => t.id),
-        // rare boss items must never vanish: the ones in your bag or still on the ground...
-        specials: Object.fromEntries(SPECIALS.map((k) => [k, countOf(player.c, k) + drops.filter((d) => d.type === k).length])),
-        // ...and what you already put into a tower's BALLISTA / POISON BOLTS square
-        towerUps: towers.filter((t) => t.up && Object.keys(t.up.paid).length).map((t) => ({ id: t.id, kind: t.up.kind, paid: t.up.paid })),
-        paid: Object.fromEntries([...zones, ...upgrades].filter((z) => z.state === 'open' && z.paid > 0).map((z) => [z.def.id, z.paid])),
-      }));
-    } catch { /* storage unavailable: play without saving */ }
-  }
-
-  function load() {
-    if (!useSave) return false;
-    let s = null;
-    try { s = JSON.parse(localStorage.getItem(saveKey) || 'null'); } catch { s = null; }
-    if (!s || s.v !== 1) return false;
-    // levels first: wall hp depends on the axe level
-    for (const k in levels) levels[k] = s.levels?.[k] || 0;
-    for (const z of zones) if (s.built?.includes(z.def.id)) construct(z, true);
-    // milestone flags that aren't buildings (e.g. 'firstPlate' unlocks the ARMOR square)
-    for (const id of s.built || []) built.add(id);
-    refreshUnlocks();
-    for (const t of towers) if (s.ballistas?.includes(t.id)) toBallista(t, true);
-    for (const t of towers) if (t.ballista && s.poisonBallistas?.includes(t.id)) toPoisonBallista(t, true);
-    for (const u of s.towerUps || []) pendingUps[u.id] = u;
-    for (const w of walls) {
-      const hp = s.walls?.[w.side];
-      if (hp !== undefined && hp < wallMax()) { w.hp = wallMax(); if (hp <= 0) damageWall(w, wallMax()); else { w.hp = hp; wallLook(w); } }
-    }
-    for (const u of upgrades) {
-      const lv = s.levels?.[u.def.id] || 0;
-      levels[u.def.id] = lv;
-      u.level = lv;
-      if (u.state === 'open' || lv > 0) applyLevel(u);
-    }
-    for (const z of [...zones, ...upgrades]) {
-      const p = s.paid?.[z.def.id];
-      if (p && z.state === 'open') { z.paid = Math.min(p, z.total - 1); refreshLabel(z); Models.setPadProgress(z.pad, z.paid / z.total); }
-    }
-    if (s.woodpile && woodpile.built) addWood(s.woodpile);
-    waves.n = s.wave || 0;
-    setCash(s.cash || 0);
-    player.armor = armorMax();
-    // give the rare items back (in the bag, or on the ground next to you if it's full)
-    for (const k of SPECIALS) {
-      for (let i = 0; i < (s.specials?.[k] || 0); i++) {
-        if (stackFree(player.c) > 0) pushStack(player.c, k, makeItem(k));
-        else dropItem(k, SPAWN, 1.5);
-      }
-    }
-    layoutStack(player.c);
-    return true;
-  }
-
-  function resetSave() {
-    try { localStorage.removeItem(saveKey); } catch { /* ignore */ }
-  }
+  // ---------- Save / load (src/save.js) ----------
+  const { save, load, resetSave } = createSave({
+    useSave, saveKey, auto, getCash: () => cash, setCash, built, levels, waves, woodpile, walls, towers, zones, upgrades,
+    player, drops, pendingUps, spawn: SPAWN, countOf, stackFree, pushStack, makeItem, dropItem, layoutStack,
+    construct, refreshUnlocks, refreshLabel, applyLevel, addWood, damageWall, wallLook, wallMax, armorMax,
+    toBallista, toPoisonBallista,
+  });
 
   // ---------- Guidance: what to do next, where it is, what each station does ----------
   const goalMarker = Models.makeGoalMarker();
@@ -1961,6 +1523,8 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     if (thrower) tips.push({ key: 'bossThrower', info: 8, icon: '🪵', text: tr('tip.bossThrower'), pos: thrower.pos.clone() });
     const poisoner = alive('poison');
     if (poisoner) tips.push({ key: 'bossPoison', info: 8, icon: '🤢', text: tr('tip.bossPoison'), pos: poisoner.pos.clone() });
+    const king = alive('king');
+    if (king) tips.push({ key: 'bossKing', info: 8, icon: '👑', text: tr('tip.bossKing'), pos: king.pos.clone() });
     const loot = drops.find((d) => d.type === 'loot');
     if (loot) tips.push({ key: 'loot', icon: '💰', text: tr('tip.loot'), pos: loot.pos.clone() });
     const armorPad = upgrades.find((u) => u.def.id === 'armor' && u.state === 'open');
@@ -2278,21 +1842,15 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     updateBallistaUpgrades(dt);
 
     // --- waves ---
-    if (!P.dead) {
-      waves.timer -= dt;
-      if (waves.timer <= 0) {
-        // elastic timer: each bear still out there pushes the next wave back a little (once per wave)
-        const left = bears.filter((b) => !b.dying).length + waves.queue.length;
-        if (left && !waves.stretched) { waves.stretched = true; waves.timer += left * WAVES.perAliveBear; waves.total += left * WAVES.perAliveBear; }
-        else { waves.stretched = false; startWave(); }
-      }
-      if (waves.queue.length) {
-        waves.gap -= dt;
-        if (waves.gap <= 0) { const q = waves.queue.shift(); spawnBear(q.kind, q.hpMult, q.n); waves.gap = WAVES.spawnGap; }
-      }
-    }
+    if (!P.dead) updateWaves(dt);
     const aliveBears = bears.filter((b) => !b.dying).length;
-    hud.setWave(aliveBears > 0 ? tr('hud.wave', { n: waves.n, bears: aliveBears }) : tr('hud.nextWave', { n: waves.n + 1, s: Math.ceil(waves.timer) }), 1 - waves.timer / waves.total);
+    // before the map is won the title counts toward the final wave (WAVE 7/15)
+    const of = (k) => (!waves.won && k <= WORLD.finalWave ? `${k}/${WORLD.finalWave}` : String(k));
+    hud.setWave(aliveBears > 0 ? tr('hud.wave', { n: of(waves.n), bears: aliveBears }) : tr('hud.nextWave', { n: of(waves.n + 1), s: Math.ceil(waves.timer) }), 1 - waves.timer / waves.total);
+    if (victoryT > 0) {
+      victoryT -= dt;
+      if (victoryT <= 0) hud.victory({ waves: waves.n });
+    }
     // boss bar: all bosses alive, armor counted as extra health
     const bossesAlive = bears.filter((b) => b.boss && !b.dying);
     if (bossesAlive.length) {
@@ -2340,7 +1898,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     for (const it of P.c.stack) P.obj.userData.back.remove(it.mesh);
     P.c.stack.length = 0;
     layoutStack(P.c);
-    for (const b of bears) { scene.remove(b.obj, b.bar); if (b.armorBar) scene.remove(b.armorBar); }
+    for (const b of bears) { scene.remove(b.obj, b.bar); if (b.armorBar) scene.remove(b.armorBar); if (b.slamRing) scene.remove(b.slamRing); }
     bears.length = 0;
     waves.queue.length = 0;
     waves.timer = waves.total = 20;
@@ -2358,6 +1916,8 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     get cash() { return cash; },
     set cash(v) { setCash(v); },
     get wave() { return waves.n; },
+    get won() { return waves.won; },
+    waves,
     skipToWave() { waves.timer = 0.01; waves.stretched = true; },
     // dev/test helpers
     give(type, n = 1) { for (let i = 0; i < n && stackFree(player.c) > 0; i++) pushStack(player.c, type, makeItem(type)); },
@@ -2368,5 +1928,15 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     flag(id) { built.add(id); refreshUnlocks(); }, // e.g. 'firstHeartwood', 'firstPlate' (tests/footage)
     // build every square (or the listed ids) at once: layout checks and footage of a full camp
     buildAll(ids) { for (const z of zones) if (z.state !== 'built' && (!ids || ids.includes(z.def.id))) construct(z, true); },
+    // playtest the final fight (in a ?slot=test tab): a full camp with about the gear of wave 14
+    // (axe LV15, bag LV10), then wave 15 and the Bear King start right away
+    testFinal() {
+      this.buildAll();
+      refreshUnlocks();
+      for (const u of upgrades) if (u.def.id !== 'armor') { u.level = levels[u.def.id] = u.def.id === 'axe' ? 14 : 9; applyLevel(u); }
+      waves.n = 14; waves.won = false; waves.kingDue = false;
+      waves.timer = 0.01; waves.stretched = true;
+      player.hp = PLAYER.maxHp;
+    },
   };
 }

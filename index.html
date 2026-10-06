@@ -8,11 +8,11 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="Polar Camp">
+  <meta name="apple-mobile-web-app-title" content="Bear Camp">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon-192.png">
   <link rel="apple-touch-icon" href="icons/icon-180.png">
-  <title>Polar Camp</title>
+  <title>Bear Camp</title>
   <link rel="stylesheet" href="style.css">
   <script type="importmap">
     { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js" } }
@@ -43,6 +43,7 @@
     <button id="help-btn" aria-label="How to play" data-i18n-aria="aria.help">?</button>
     <button id="sound-btn" aria-label="Sound on/off" data-i18n-aria="aria.sound">🔊</button>
     <button id="options-btn" aria-label="Options" data-i18n-aria="aria.options">⚙️</button>
+    <button id="map-btn" class="hidden" aria-label="World map" data-i18n-aria="map.title">🗺️</button>
 
     <div id="hint" class="hidden"><span id="hint-ico"></span><span id="hint-text"></span></div>
 
@@ -61,9 +62,39 @@
       </div>
     </div>
 
+    <div id="victory" class="hidden" role="dialog" aria-label="Victory">
+      <div class="victory-card">
+        <div class="victory-crown">👑</div>
+        <div class="victory-title" data-i18n="victory.title">VICTORY!</div>
+        <div class="victory-sub" data-i18n="victory.sub">The Bear King is down. Your camp is safe!</div>
+        <div class="victory-stats" id="victory-stats"></div>
+        <button id="victory-map" data-i18n="victory.map">WORLD MAP</button>
+      </div>
+    </div>
+
+    <!-- world map: the polar camp (beaten) and the next world, not built yet -->
+    <div id="worldmap" class="hidden" role="dialog" aria-label="World map" data-i18n-aria="map.title">
+      <div class="map-card">
+        <div class="map-title" data-i18n="map.title">WORLD MAP</div>
+        <div class="map-board">
+          <svg class="map-path" viewBox="0 0 100 60" preserveAspectRatio="none" aria-hidden="true"><path d="M22 44 C 40 46, 52 20, 76 17" /></svg>
+          <div class="map-node done" style="left:22%;top:73%">
+            <div class="map-pin">❄️<span class="map-badge">👑</span></div>
+            <b data-i18n="map.polar">POLAR CAMP</b><small data-i18n="map.beaten">BEATEN</small>
+          </div>
+          <div class="map-node soon" style="left:76%;top:28%">
+            <div class="map-pin">🌴<span class="map-badge">🔒</span></div>
+            <b data-i18n="map.island">DESERT ISLAND</b><small data-i18n="map.soon">COMING SOON</small>
+          </div>
+        </div>
+        <p class="map-endless" data-i18n="map.endless">Until then, the bears keep coming: how far can you go?</p>
+        <button id="map-play" data-i18n="map.play">KEEP PLAYING</button>
+      </div>
+    </div>
+
     <div id="title-screen">
       <button id="lang-link" class="link"><span id="lang-link-flag" class="flag"></span><span id="lang-link-name">English</span></button>
-      <div class="logo">POLAR<br>CAMP</div>
+      <div class="logo">BEAR<br>CAMP</div>
       <div class="tag" data-i18n="title.tag">Build your camp. Survive the bears.</div>
       <div class="loop">
         <div><span>🌲</span><b data-i18n="title.chop">Chop</b></div><i>›</i>
@@ -79,7 +110,7 @@
 
     <!-- first launch only: the signpost language picker (concept A, owner's pick 2026-09-29) -->
     <div id="lang-screen" class="hidden">
-      <div class="logo">POLAR<br>CAMP</div>
+      <div class="logo">BEAR<br>CAMP</div>
       <div class="ask" data-i18n="lang.ask">Choose your language</div>
       <div class="post">
         <button class="plank" data-lang="en"><span class="snowcap"></span><span class="nail"></span><span>English</span><span class="code">EN</span></button>

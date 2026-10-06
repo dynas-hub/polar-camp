@@ -319,15 +319,22 @@ export function makeCash() {
 }
 
 // ---------- Bears ----------
-// variant: 'normal' | 'mega' | 'armored' | 'poison' | 'thrower'
+// variant: 'normal' | 'mega' | 'armored' | 'poison' | 'thrower' | 'king'
 const furFor = {
   normal: M.bear, mega: M.bearMega, armored: M.bear, thrower: mat(0xf1e9da),
   poison: mat(0x9be36b),
+  // the King is a brilliant white (owner's review): pure white with a little glow so it pops on the snow
+  king: mat(0xffffff, { emissive: 0x3a3a3a }),
 };
+// the Bear King's cape: an open half tube (+ a bit more) that becomes a blanket over the back
+const CAPE_GEO = new THREE.CylinderGeometry(1, 1, 1, 18, 1, true, Math.PI * 0.4, Math.PI * 1.2);
+// the Bear King's ice armor: translucent so it reads as ice, not steel
+const ICE = mat(0xa8e4ff, { transparent: true, opacity: 0.82, emissive: 0x1b4d66 });
 
 export function makeBear(variant = 'normal') {
   const mega = variant !== 'normal';
   const root = new THREE.Group();
+  root.userData = {};
   const body = new THREE.Group();
   root.add(body);
   const fur = furFor[variant] || M.bear;
@@ -375,9 +382,68 @@ export function makeBear(variant = 'normal') {
     heldLog.position.set(0, 1.15, 0.65);
     heldLog.scale.setScalar(1.2);
     body.add(heldLog);
+  } else if (variant === 'king') {
+    // World 1 final boss: a gold crown, a royal cape with a white fur collar, and ice armor
+    // (two shoulder chunks and a chest plate) that the axe or a ballista breaks off one by one.
+    const gold = mat(0xffc83d), gem = mat(0xe0304a), cape = mat(0x8a1f4f, { side: THREE.DoubleSide }), trim = mat(0xfbfbf7, { side: THREE.DoubleSide });
+    const crown = new THREE.Group();
+    crown.position.set(0, 0.3, -0.02);
+    crown.add(part(G.cyl, gold, 0.24, 0.1, 0.24));
+    for (let i = 0; i < 5; i++) {
+      const a = (i / 5) * Math.PI * 2;
+      crown.add(part(G.cone4, gold, 0.07, 0.17, 0.07, Math.sin(a) * 0.2, 0.12, Math.cos(a) * 0.2));
+    }
+    crown.add(part(G.sphere, gem, 0.045, 0.045, 0.03, 0, 0.01, 0.24));
+    crown.rotation.z = 0.12; // worn a little crooked
+    head.add(crown);
+    // the cape: a half tube draped over the back, open at the rump, with a white fur trim at the
+    // shoulders; userData.cape sways while walking
+    const capePivot = new THREE.Group();
+    capePivot.position.set(0, 0.76, 0.32);
+    const cloth = part(CAPE_GEO, cape, 0.59, 1.0, 0.53, 0, 0, -0.48);
+    const collar = part(CAPE_GEO, trim, 0.62, 0.16, 0.56, 0, 0, 0);
+    for (const m of [cloth, collar]) m.rotation.x = Math.PI / 2;
+    capePivot.add(cloth, collar);
+    for (const x of [-0.32, 0, 0.32]) capePivot.add(part(G.sphere, M.black, 0.035, 0.035, 0.035, x, Math.sqrt(0.31 - x * x) * 0.97, 0.06));
+    body.add(capePivot);
+    // ice armor plates (knocked off by the axe / ballista bolts, like the armored bear's steel)
+    for (const side of [-1, 1]) {
+      const sh = new THREE.Group();
+      sh.position.set(side * 0.46, 1.08, 0.42);
+      sh.add(part(G.sphere, ICE, 0.26, 0.2, 0.3));
+      sh.add(part(G.cone4, ICE, 0.09, 0.3, 0.09, side * 0.1, 0.22, 0));
+      sh.add(part(G.cone4, ICE, 0.07, 0.22, 0.07, side * 0.12, 0.16, -0.16));
+      body.add(sh);
+      plates.push(sh);
+    }
+    const chest = part(G.box, ICE, 0.6, 0.36, 0.14, 0, 0.52, 0.72);
+    chest.rotation.x = -0.25;
+    body.add(chest);
+    plates.push(chest);
+    root.userData.cape = capePivot;
   }
-  root.userData = { body, head, legs, plates, heldLog };
+  root.userData = { ...root.userData, body, head, legs, plates, heldLog };
   return root;
+}
+
+// Bear King's ground slam warning: a red ring on the ground that fills in before the hit.
+export function makeSlamRing() {
+  const g = new THREE.Group();
+  const edge = new THREE.Mesh(new THREE.RingGeometry(0.93, 1, 48), new THREE.MeshBasicMaterial({ color: 0xff3b30, transparent: true, opacity: 0.9, depthWrite: false }));
+  const fill = new THREE.Mesh(new THREE.CircleGeometry(1, 48), new THREE.MeshBasicMaterial({ color: 0xff3b30, transparent: true, opacity: 0.25, depthWrite: false }));
+  for (const m of [edge, fill]) { m.rotation.x = -Math.PI / 2; m.renderOrder = 5; }
+  edge.position.y = 0.04; fill.position.y = 0.03;
+  g.add(edge, fill);
+  g.userData = { edge, fill };
+  return g;
+}
+
+// Block of ice thrown by the Bear King at the walls (phase 2).
+export function makeIceBlock() {
+  const g = new THREE.Group();
+  g.add(part(G.box, ICE, 0.7, 0.6, 0.7));
+  g.add(part(G.box, mat(0xeaf8ff), 0.5, 0.08, 0.5, 0, 0.31, 0));
+  return g;
 }
 
 // Poison bear's death cloud: a translucent green blob that swells, then bursts.

@@ -56,6 +56,15 @@ export const BOSSES = {
   thrower: { name: 'LOG THROWER', hp: 34, speed: 2.6, damage: 2, attackRate: 1.2, radius: 0.9, meat: 6, scale: 1.5, cash: 50, wallHit: 4,
     // 25 per log (× the boss scale): a fresh 250 hp wall falls in 10 logs (~28 s) if nobody goes out to stop it
     range: 9, throwEvery: 2.8, firstThrow: 1.2, wallDamage: 25, hitDamage: 3, heartwood: 1 },
+  // World 1 final boss (wave WORLD.finalWave), ~45 s fight with the expected gear. Phase 1: ice armor
+  // (arrows bounce, the axe or a ballista breaks it) + a ground slam every `slamEvery` s, warned by a red
+  // ring `slamWarn` s before. Phase 2 below `phase2` of its hp: roars, calls `summon` bears, +20% speed,
+  // throws ice blocks at the walls. Its death wins the map (victory screen, the island on the world map).
+  king: { name: 'BEAR KING', hp: 400, armor: 150, plates: 3, plateDrops: 2, speed: 2.4, damage: 3, attackRate: 1.4, radius: 1.38, meat: 12, scale: 2.4, cash: 300, wallHit: 8, final: true,
+    slamEvery: 6, slamWarn: 1, slamRadius: 3.6, slamReach: 6, slamDamage: 6, slamPush: 2.5,
+    phase2: 0.5, rage: 1.2, summon: 3,
+    // ice blocks: like the log thrower's logs (× the boss scale on walls), 12 m reach, no wood left behind
+    iceEvery: 4, iceRange: 12, iceWallDamage: 30, iceHit: 4 },
 };
 // the log thrower comes before the poison bear: its heartwood makes the ballista that the poison vial upgrades
 export const BOSS_ORDER = ['mega', 'armored', 'thrower', 'poison'];
@@ -84,6 +93,10 @@ export const ARMOR = { perLevel: 4, regen: 2 };
 // Hired workers carry 30% of what your bag holds (upgrading the bag upgrades them too)
 // and walk a little faster as you level the bag.
 export const WORKERS = { share: 0.3, speedPerBagLevel: 0.03, maxSpeedBonus: 0.5 };
+
+// The map ends: the Bear King comes at the final wave; beating him wins the map, then the waves go on (endless).
+// Saves already past it meet him at their next boss wave.
+export const WORLD = { finalWave: 15 };
 
 export const WAVES = {
   firstDelay: 30,

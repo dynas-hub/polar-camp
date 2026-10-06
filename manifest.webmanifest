@@ -1,6 +1,6 @@
 {
-  "name": "Polar Camp",
-  "short_name": "Polar Camp",
+  "name": "Bear Camp",
+  "short_name": "Bear Camp",
   "description": "Chop trees, build your camp and survive the polar bears.",
   "start_url": "./",
   "scope": "./",
