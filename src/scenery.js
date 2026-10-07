@@ -4,13 +4,28 @@ import * as THREE from 'three';
 import { CAMP_HALF, TREE, ANNEX_END } from './config.js';
 import * as Models from './models.js';
 import { rng } from './util.js';
+import { world } from './worlds.js';
 
-// addBox(x, z, halfWidth, halfDepth) registers a solid box (the tent).
-export function buildScenery({ scene, addBox }) {
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), Models.M.snow);
+export function buildScenery({ scene }) {
+  // the ground takes the world's color (snow on the polar map). With a sea, the land is a round
+  // island (you can walk to 38 m from the camp, the beach goes to 44 m) in the middle of the water.
+  const look = world().look;
+  const ground = new THREE.Mesh(look.sea ? new THREE.CircleGeometry(44, 64) : new THREE.PlaneGeometry(200, 200),
+    new THREE.MeshLambertMaterial({ color: world().palette.ground }));
   ground.rotation.x = -Math.PI / 2;
   ground.receiveShadow = true;
   scene.add(ground);
+  if (look.sea) {
+    const water = new THREE.Mesh(new THREE.PlaneGeometry(240, 240), new THREE.MeshLambertMaterial({ color: look.sea }));
+    water.rotation.x = -Math.PI / 2;
+    water.position.y = -0.04;
+    // a lighter band of shallow water and a line of foam along the beach
+    const shallow = new THREE.Mesh(new THREE.RingGeometry(43.5, 49, 64), new THREE.MeshLambertMaterial({ color: 0x7fd6ea }));
+    const foam = new THREE.Mesh(new THREE.RingGeometry(43.6, 44.6, 64), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.7 }));
+    shallow.rotation.x = foam.rotation.x = -Math.PI / 2;
+    shallow.position.y = -0.03; foam.position.y = -0.02;
+    scene.add(water, shallow, foam);
+  }
   scene.add(Models.makeCampFloor());
 
   const campfire = Models.makeCampfire();
@@ -21,8 +36,7 @@ export function buildScenery({ scene, addBox }) {
 
   const tent = Models.makeTent();
   tent.position.set(-3.25, 0.12, 0.4);
-  scene.add(tent);
-  addBox(tent.position.x, tent.position.z, 0.95, 0.95);
+  scene.add(tent); // decoration: everyone walks right through it (owner, 2026-10-07)
 
   const rand = rng(7);
   const trees = [];

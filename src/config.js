@@ -1,4 +1,6 @@
-// All gameplay tuning lives here so balancing never means hunting through code.
+// All gameplay tuning lives here so balancing never means hunting through code
+// (per-world numbers: src/worlds.js).
+import { world } from './worlds.js';
 
 // camp floor spans -7.5..7.5 on x and z (v0.4.3: was 6, everything spread ×1.25 so the lanes are wider)
 export const CAMP_HALF = 7.5;
@@ -56,7 +58,7 @@ export const BOSSES = {
   thrower: { name: 'LOG THROWER', hp: 34, speed: 2.6, damage: 2, attackRate: 1.2, radius: 0.9, meat: 6, scale: 1.5, cash: 50, wallHit: 4,
     // 25 per log (× the boss scale): a fresh 250 hp wall falls in 10 logs (~28 s) if nobody goes out to stop it
     range: 9, throwEvery: 2.8, firstThrow: 1.2, wallDamage: 25, hitDamage: 3, heartwood: 1 },
-  // World 1 final boss (wave WORLD.finalWave), ~45 s fight with the expected gear. Phase 1: ice armor
+  // World 1 final boss (wave world().finalWave = 15), ~45 s fight with the expected gear. Phase 1: ice armor
   // (arrows bounce, the axe or a ballista breaks it) + a ground slam every `slamEvery` s, warned by a red
   // ring `slamWarn` s before. Phase 2 below `phase2` of its hp: roars, calls `summon` bears, +20% speed,
   // throws ice blocks at the walls. Its death wins the map (victory screen, the island on the world map).
@@ -65,9 +67,40 @@ export const BOSSES = {
     phase2: 0.5, rage: 1.2, summon: 3,
     // ice blocks: like the log thrower's logs (× the boss scale on walls), 12 m reach, no wood left behind
     iceEvery: 4, iceRange: 12, iceWallDamage: 30, iceHit: 4 },
+  // ---- island (world 2) ----
+  // same role as the log thrower: lobs coconuts at walls, ballistas and you; drops heartwood (ballista)
+  coco: { name: 'COCONUT THROWER', hp: 34, speed: 2.6, damage: 2, attackRate: 1.2, radius: 0.9, meat: 6, scale: 1.5, cash: 50, wallHit: 4,
+    range: 9, throwEvery: 2.8, firstThrow: 1.2, wallDamage: 25, hitDamage: 3, heartwood: 1, throws: 'coconut' },
+  // replaces the poison bear: keeps its distance and throws small monkeys at you or a worker (MONKEYS);
+  // drops the vial (poison bolts)
+  monkey: { name: 'MONKEY CHIEF', hp: 30, speed: 3.0, damage: 2, attackRate: 1.2, radius: 0.85, meat: 4, scale: 1.05, cash: 40, wallHit: 4,
+    range: 8, throwEvery: 5, firstThrow: 1.5, vial: 1, throws: 'monkey' },
+  // World 2 final boss (wave 18), ~45 s fight. Phase 1: every `rollEvery` s it curls up in its shell
+  // (invulnerable, `curlTime` s warning) and chains two moves (owner's picks, 2026-10-07):
+  //  - pinball run: `rollChain` rolls at `rollSpeed` m/s bouncing off walls (the last one aimed at you);
+  //    `rollDamage` × boss scale to each wall hit, `rollHit` + a push if it runs you over
+  //  - shell spin (only when you're within `spinRange`): `spinVolleys` rings of `spinShells` sharp shells
+  //    (lines on the ground `spinWarn` s before, the 2nd ring fills the gaps); `spinHit` to you, walls stop
+  //    them (`spinWallDamage` × boss scale): inside the camp you're safe (owner, 2026-10-07)
+  // Not 0.5 m closer to you in `stuckRoll` s (blocked by the camp's buildings), it starts its move at once,
+  // rolling straight at you. Then it sits dizzy for `dizzy` s: the moment to hit it. Phase 2 below `phase2`: the shell breaks for
+  // good, it gets `rage` × faster and bites `rageAttack` × as often.
+  shell: { name: 'SHELL BEAR', hp: 440, speed: 2.3, damage: 3, attackRate: 1.4, radius: 1.3, meat: 12, scale: 2.2, cash: 300, wallHit: 8, final: true,
+    rollEvery: 6, stuckRoll: 1, curlTime: 0.8, rollSpeed: 9, rollMax: 2.5, rollChain: 3, rollDamage: 70, rollHit: 10, rollPush: 3, dizzy: 1.8,
+    spinWarn: 1, spinShells: 10, spinVolleys: 2, spinGap: 0.5, spinRange: 14, spinHit: 3, spinWallDamage: 20,
+    phase2: 0.5, rage: 1.4, rageAttack: 0.7 },
 };
-// the log thrower comes before the poison bear: its heartwood makes the ballista that the poison vial upgrades
-export const BOSS_ORDER = ['mega', 'armored', 'thrower', 'poison'];
+
+// Reward for beating a world (owner, 2026-10-06): the camp of every later world starts with
+// `freeBagLevels` bag levels per world beaten before it. They're free: the bag's price ignores them.
+export const REWARDS = { freeBagLevels: 2 };
+
+// Small monkeys thrown by the monkey chief. Each one clinging to you or a worker slows them by
+// `slowEach` (at most `slowCap`, so you can always reach the water); wading in the sea shakes them all
+// off. On you they bite `biteShare` of a bear's bite every `biteEvery` s (workers never get hurt).
+// A monkey that misses runs after you for `life` s. At most `perHost` on anyone. When you walk up to a
+// worker, its monkeys jump onto you. They all run away when the chief dies.
+export const MONKEYS = { slowEach: 0.08, slowCap: 0.25, biteShare: 0.2, biteEvery: 1.5, perHost: 4, run: 4.5, life: 15 };
 
 // Poison never wears off: it keeps ticking until you die or reach the campfire
 // (1 hp/s with 30 hp = about 30 s to get there).
@@ -94,36 +127,46 @@ export const ARMOR = { perLevel: 4, regen: 2 };
 // and walk a little faster as you level the bag.
 export const WORKERS = { share: 0.3, speedPerBagLevel: 0.03, maxSpeedBonus: 0.5 };
 
-// The map ends: the Bear King comes at the final wave; beating him wins the map, then the waves go on (endless).
-// Saves already past it meet him at their next boss wave.
-export const WORLD = { finalWave: 15 };
+// Each map ends: its final boss (the Bear King on the polar map) comes at world().finalWave; beating
+// it wins the map, then the waves go on (endless). Saves already past it meet it at their next boss wave.
+// Per-world numbers (final wave, boss order, difficulty) live in src/worlds.js.
 
 export const WAVES = {
   firstDelay: 30,
-  interval: 26,
+  // 26 s in world 1, 1 s less per world down to 20
+  get interval() { return world().interval; },
   spawnRadius: 30,
   // extra seconds before the next wave for each bear still alive when the countdown ends
   // (elastic timer: falling behind never snowballs)
   perAliveBear: 1,
   // capped so late waves stay smooth on phones; bears get tougher every wave instead:
-  // linear, +2 hp per wave for a 3 hp bear: 3, 5, 7… 21 at wave 10, 41 at 20, 91 at 45
+  // linear, +2 hp per wave for a 3 hp bear in world 1: 3, 5, 7… 21 at wave 10, 41 at 20, 91 at 45
+  // (+2.3 per wave in world 2, +4.7 in world 10: world().bearHpStep)
   countFor: (n) => Math.min(20, 1 + n),
-  hpScale: (n) => 1 + (n - 1) * (2 / 3),
+  hpScale: (n) => 1 + (n - 1) * (world().bearHpStep / BEAR.hp),
   spawnGap: 0.7,
-  // A boss every 3 waves. Waves 3-12 introduce them one at a time, then they rotate alone
-  // (15-24), come as a pair of the same class (27-36), then two different classes (39+).
+  // A boss every 3 waves, in the world's boss order. World 1: one at a time up to wave 24 (the endless
+  // waves after the King rotate them alone), a pair of the same class (27-36), then two different
+  // classes (39+). Later worlds: two different bosses from world().twoBossesFrom.
   bossesFor(n) {
     if (n % 3) return [];
-    const k = n / 3, O = BOSS_ORDER;
-    if (k <= 8) return [O[(k - 1) % 4]];
-    if (k <= 12) return [O[(k - 1) % 4], O[(k - 1) % 4]];
-    return [O[(k - 1) % 4], O[k % 4]];
+    const W = world(), O = W.bossOrder, L = O.length, k = n / 3;
+    if (n < Math.min(W.twoBossesFrom, 27)) return [O[(k - 1) % L]];
+    if (W.n === 1 && k <= 12) return [O[(k - 1) % L], O[(k - 1) % L]];
+    return [O[(k - 1) % L], O[k % L]];
   },
   // bosses scale with the wave, linear: ×1.0 at wave 3, ×2.2 at wave 9, ×3.4 at wave 15, ×9.4 at wave 45
   bossScale: (n) => 1 + (n - 3) * 0.2,
   // a boss's death sends out a shockwave that stuns every bear on the map (seconds)
   bossStun: 4,
 };
+
+// Island tide (src/tide.js): the shoreline, measured from the camp's walls (+ the annex once built),
+// swings between `low` m (the whole island is dry) and `high` m (owner, 2026-10-06: at high tide the sea
+// surrounds the camp, only the camp and what's inside stay dry) once every `periodWaves` waves.
+// Wading slows you, the workers and the bears to `slow`; flooded palms can't be chopped.
+// Each low tide leaves `driftwood` logs and a $`loot` bag on the beach.
+export const TIDE = { high: 1.5, low: 28, periodWaves: 2, slow: 0.5, driftwood: 4, loot: 10 };
 
 // Towers get stronger with the axe level L (no extra menu): an arrow deals damage(L).
 // Ballista bolts (damage, armor damage, poison) are multiplied by the same factor.

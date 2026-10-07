@@ -1,8 +1,26 @@
-// Save / load: the whole game state as one JSON entry in localStorage.
-// The key keeps the old name: renaming it would wipe every player's save.
+// Save / load: the whole game state as one JSON entry in localStorage, one entry per world
+// (each world keeps its own camp), plus a small progress entry: the world being played.
+// The keys keep the old name: renaming them would wipe every player's save.
 import * as Models from './models.js';
 
 export const SAVE_KEY = 'polarcamp-save-v1';
+
+// The polar camp keeps the original key (saves made before the worlds existed); the others get
+// a suffix. `slot` (?slot=test) gives a separate set of saves for tests.
+export function saveKeyFor(worldId, slot = '') {
+  return SAVE_KEY + (worldId === 'polar' ? '' : '-' + worldId) + (slot ? '-' + slot : '');
+}
+const progressKey = (slot = '') => 'polarcamp-progress' + (slot ? '-' + slot : '');
+export function readProgress(slot) {
+  try { return JSON.parse(localStorage.getItem(progressKey(slot)) || 'null') || { world: 'polar' }; } catch { return { world: 'polar' }; }
+}
+export function writeProgress(p, slot) {
+  try { localStorage.setItem(progressKey(slot), JSON.stringify(p)); } catch { /* storage unavailable */ }
+}
+// a world is beaten once its save says so (its final boss fell)
+export function worldWon(worldId, slot) {
+  try { return !!JSON.parse(localStorage.getItem(saveKeyFor(worldId, slot)) || 'null')?.won; } catch { return false; }
+}
 const SPECIALS = ['heartwood', 'vial', 'plate']; // rare boss items, saved wherever they are
 
 export function createSave({
@@ -15,7 +33,7 @@ export function createSave({
     if (!useSave || auto.used) return; // autopilot runs are for footage; never overwrite the player's save
     try {
       localStorage.setItem(saveKey, JSON.stringify({
-        v: 1, cash: getCash(), built: [...built], levels, wave: waves.n, won: waves.won, kingDue: waves.kingDue, woodpile: woodpile.count,
+        v: 1, cash: getCash(), built: [...built], levels, wave: waves.n, won: waves.won, finalDue: waves.finalDue, woodpile: woodpile.count,
         walls: Object.fromEntries(walls.map((w) => [w.side, Math.round(w.hp)])),
         ballistas: towers.filter((t) => t.ballista).map((t) => t.id),
         poisonBallistas: towers.filter((t) => t.poison).map((t) => t.id),
@@ -59,7 +77,7 @@ export function createSave({
     if (s.woodpile && woodpile.built) addWood(s.woodpile);
     waves.n = s.wave || 0;
     waves.won = !!s.won;
-    waves.kingDue = !!s.kingDue;
+    waves.finalDue = !!(s.finalDue ?? s.kingDue); // kingDue: v0.5.0 saves
     setCash(s.cash || 0);
     player.armor = armorMax();
     // give the rare items back (in the bag, or on the ground next to you if it's full)

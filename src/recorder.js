@@ -40,6 +40,12 @@ export function createRecorder(stage, gameCanvas, renderNow) {
     const lh = parseFloat(cs.fontSize) * scale * 1.15;
     const cx = (r.left - sr.left + r.width / 2) * scale;
     const cy = (r.top - sr.top + r.height / 2) * scale - ((lines.length - 1) * lh) / 2;
+    // a thin dark outline under the text (like the game's CSS) keeps it readable on snow and white sand
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 2.5 * scale;
+    ctx.strokeStyle = 'rgba(0,0,0,.55)';
+    lines.forEach((ln, i) => ctx.strokeText(ln, cx, cy + i * lh));
+    ctx.shadowColor = 'transparent';
     lines.forEach((ln, i) => ctx.fillText(ln, cx, cy + i * lh));
     ctx.restore();
   }

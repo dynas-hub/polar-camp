@@ -4,6 +4,10 @@
 // Phones only allow audio after a tap: sfx.unlock() runs on the first touch/click/key.
 
 const MUTE_KEY = 'polarcamp-muted';
+// Music: one loop per world (src/sounds/<file>, from worlds.js), its own ON/OFF in the Options.
+// It goes straight to the speakers (not through the effects' compressor) and the Sound switch mutes it too.
+const MUSIC_KEY = 'polarcamp-music';
+const MUSIC_VOLUME = 0.3;
 
 // Minimum seconds between two plays of the same sound (rapid events would turn into noise).
 const THROTTLE = {
@@ -24,6 +28,9 @@ export function createAudio() {
   const buffers = {}; // decoded SAMPLES
   let muted = false;
   try { muted = localStorage.getItem(MUTE_KEY) === '1'; } catch { /* ignore */ }
+  let musicOn = true;
+  try { musicOn = localStorage.getItem(MUSIC_KEY) !== '0'; } catch { /* ignore */ }
+  let musicFile = null, musicBuf = null, musicSrc = null, musicGain = null;
   const last = {};
   const listener = { x: 0, z: 0 };
   // Capture mode (offline filming): sounds are logged with their game time instead of
@@ -45,6 +52,10 @@ export function createAudio() {
     master = ctx.createGain();
     master.gain.value = muted ? 0 : 0.55;
     master.connect(comp).connect(ctx.destination);
+    musicGain = ctx.createGain();
+    musicGain.gain.value = 0;
+    musicGain.connect(ctx.destination);
+    loadMusic();
     // 1 s of white noise, reused by every noisy sound
     noiseBuf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
     const d = noiseBuf.getChannelData(0);
@@ -167,6 +178,14 @@ export function createAudio() {
         s.start(0);
       }
     },
+    // the world's music loop (file in src/sounds/), or null for none; starts once audio is unlocked
+    setMusic(file) { musicFile = file; musicBuf = null; stopMusic(); if (ctx) loadMusic(); },
+    get musicOn() { return musicOn; },
+    setMusicOn(v) {
+      musicOn = v;
+      try { localStorage.setItem(MUSIC_KEY, v ? '1' : '0'); } catch { /* ignore */ }
+      fadeMusic();
+    },
     setListener(x, z) { listener.x = x; listener.z = z; },
     names: () => Object.keys(SOUNDS),
     // opts.force: build the sound even if the browser hasn't allowed audio yet (tests)
@@ -224,8 +243,40 @@ export function createAudio() {
       muted = v;
       try { localStorage.setItem(MUTE_KEY, v ? '1' : '0'); } catch { /* ignore */ }
       if (master) master.gain.value = v ? 0 : 0.55;
+      fadeMusic();
     },
   };
+
+  // ---- music ----
+  function loadMusic() {
+    if (!musicFile || musicBuf) return;
+    const file = musicFile;
+    fetch(new URL(`./sounds/${file}`, import.meta.url))
+      .then((r) => { if (!r.ok) throw new Error(r.status); return r.arrayBuffer(); })
+      .then((a) => new Promise((ok, fail) => ctx.decodeAudioData(a, ok, fail)))
+      .then((b) => { if (file === musicFile) { musicBuf = b; startMusic(); } })
+      .catch(() => { /* no music file yet: silence */ });
+  }
+  function startMusic() {
+    if (!ctx || !musicBuf || musicSrc) return;
+    musicSrc = ctx.createBufferSource();
+    musicSrc.buffer = musicBuf;
+    musicSrc.loop = true;
+    musicSrc.connect(musicGain);
+    musicSrc.start();
+    fadeMusic();
+  }
+  function stopMusic() {
+    if (musicSrc) { try { musicSrc.stop(); } catch { /* already stopped */ } musicSrc = null; }
+  }
+  // a short fade to the right volume (0 when muted or switched off)
+  function fadeMusic() {
+    if (!musicGain) return;
+    const t = ctx.currentTime, v = muted || !musicOn ? 0 : MUSIC_VOLUME;
+    musicGain.gain.cancelScheduledValues(t);
+    musicGain.gain.setValueAtTime(musicGain.gain.value, t);
+    musicGain.gain.linearRampToValueAtTime(v, t + 0.6);
+  }
 }
 
 // AudioBuffer → 16-bit PCM WAV

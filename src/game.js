@@ -3,14 +3,16 @@
 import * as THREE from 'three';
 import {
   CAMP_HALF, PLAYER, TREE, POISON, WALL, ARMOR, TOWER, BALLISTA, ECONOMY, ZONES, UPGRADES, HELPERS, WOODPILE,
-  WALLS, ANNEX_END, WORKERS, SMOKER, WORLD, WAVES,
+  WALLS, ANNEX_END, WORKERS, SMOKER, WAVES, BEAR,
 } from './config.js';
+import { world } from './worlds.js';
 import * as Models from './models.js';
 import { t as tr, tName } from './i18n.js';
 import { lerpAngle, easeOutBack, dist2d } from './util.js';
 import { buildScenery } from './scenery.js';
 import { createBears } from './bears.js';
 import { createWaves } from './waves.js';
+import { createTide } from './tide.js';
 import { createSave, SAVE_KEY } from './save.js';
 
 const V = () => new THREE.Vector3();
@@ -21,13 +23,14 @@ const WORLD_R = 38;
 
 const NO_SFX = { play() {}, setListener() {} };
 
-export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = true, sfx = NO_SFX, saveKey = SAVE_KEY }) {
+// bagBonus: free bag levels this world's camp starts with (REWARDS.freeBagLevels per world beaten before it)
+export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = true, sfx = NO_SFX, saveKey = SAVE_KEY, bagBonus = 0 }) {
   // ---------- World ----------
   const colliders = []; // AABBs {minX,maxX,minZ,maxZ}
   const wallColliders = []; // subset used for path planning
   const circles = [];   // static round obstacles {x,z,r}
   const addBox = (x, z, hw, hd) => colliders.push({ minX: x - hw, maxX: x + hw, minZ: z - hd, maxZ: z + hd });
-  const { campfire, trees } = buildScenery({ scene, addBox });
+  const { campfire, trees } = buildScenery({ scene });
 
   let clock = 0;
   const events = [];
@@ -136,7 +139,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     currency: def.cost.logs ? 'log' : 'cash', payT: 0, pad: null, label: null, pop: 0,
   }));
   const upgrades = UPGRADES.map((def) => ({
-    def, state: 'locked', level: 0, paid: 0, total: def.base, currency: def.currency || 'cash', payT: 0, pad: null, label: null, pop: 0,
+    def, state: 'locked', level: 0, paid: 0, total: def.currency ? def.base : Math.round(def.base * world().priceMult), currency: def.currency || 'cash', payT: 0, pad: null, label: null, pop: 0,
   }));
   const CURRENCY_ICON = { log: '🪵', cash: '💵', plate: '🛡️' };
 
@@ -405,7 +408,9 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       return;
     }
     u.paid = 0;
-    u.total = u.def.step ? u.def.base + u.def.step * u.level : Math.round(u.def.base * Math.pow(u.def.growth, u.level));
+    // cash upgrades cost a little more in later worlds (×1 in world 1); free bag levels don't count
+    const paidLevel = u.def.id === 'bag' ? Math.max(0, u.level - bagBonus) : u.level;
+    u.total = u.def.step ? Math.round((u.def.base + u.def.step * paidLevel) * world().priceMult) : Math.round(u.def.base * Math.pow(u.def.growth, paidLevel));
     if (u.label) refreshLabel(u);
     if (u.pad) Models.setPadProgress(u.pad, 0);
   }
@@ -511,23 +516,30 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
   }
 
   // Outside the camp, a straight line can run into a wall: hop via the nearest outer corner.
+  // When the only open corners lie across the camp, walk straight instead: in the gate mouth, a
+  // line brushing the wall blocks the near corners, and the far one is reached in through the
+  // gate. Once inside, the walker was routed back out through the gate, then sent in again
+  // (the hunter paced in the north gate after meat lying against the outside of the wall).
   function viaCorner(from, to) {
     if (isInside(from) || !segBlocked(from, to)) return to;
     const C = H + 1.3, S = expanded() ? ANNEX_END + 1.3 : C;
     const corners = [[C, S], [C, -C], [-C, S], [-C, -C]].map(([x, z]) => ({ x, z }));
+    const camp = { minX: -H, maxX: H, minZ: -H, maxZ: expanded() ? ANNEX_END : H };
+    const acrossCamp = (c) => !isInside(to) && segHitsBox(from, c, camp, -0.5) !== null;
     // corner → goal, via one more corner when the camp still stands in the way (otherwise the
     // corner you stand next to always looked shortest and walkers turned back and forth there)
     const onward = (c) => !segBlocked(c, to) ? dist2d(c, to)
       : Math.min(...corners.filter((q) => q !== c && !segBlocked(c, q) && !segBlocked(q, to)).map((q) => dist2d(c, q) + dist2d(q, to)));
-    let best = to, bestLen = Infinity;
+    let best = to, bestLen = Infinity, outsideHop = false;
     for (const c of corners) {
       if (dist2d(from, c) < 0.4 || segBlocked(from, c)) continue;
+      if (!acrossCamp(c)) outsideHop = true;
       // (a goal two corners away: fall back to the straight-line guess, heavily penalized)
       const next = onward(c);
       const len = dist2d(from, c) + (Number.isFinite(next) ? next : 1000 + dist2d(c, to));
       if (len < bestLen) { bestLen = len; best = new THREE.Vector3(c.x, 0, c.z); }
     }
-    return best;
+    return outsideHop ? best : to;
   }
 
   // A building (sell table, grill, tower...) right across the way: head for the corner of its
@@ -669,7 +681,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     if (l > 0.001) {
       [dx, dz] = steer(h, dx / l, dz / l);
       const speedBonus = 1 + Math.min(WORKERS.maxSpeedBonus, WORKERS.speedPerBagLevel * levels.bag);
-      intended = Math.min(l, h.def.speed * speedBonus * dt);
+      intended = Math.min(l, h.def.speed * speedBonus * tide.slowAt(h.pos) * clingSlow(h) * dt);
       h.pos.x += dx * intended; h.pos.z += dz * intended;
       h.facing = lerpAngle(h.facing, Math.atan2(dx, dz), Math.min(1, dt * 12));
     }
@@ -720,9 +732,9 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
         }
       } else {
         let t = h.target;
-        if (!t || !t.alive || (t.claim && t.claim !== h)) {
+        if (!t || !choppable(t) || (t.claim && t.claim !== h)) {
           if (t && t.claim === h) t.claim = null;
-          t = h.target = trees.filter((x) => x.alive && !x.claim)
+          t = h.target = trees.filter((x) => choppable(x) && !x.claim)
             .sort((a, b) => dist2d(a, woodpile.pos) - dist2d(b, woodpile.pos))[0] || null;
           if (t) t.claim = h;
         }
@@ -1001,9 +1013,14 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
 
   // ---------- Bears and bosses (src/bears.js) ----------
   const drops = [];
-  const { bears, clouds, thrown, spawnBear, hurtBear, updateBears } = createBears({
+  // the island's tide (src/tide.js; does nothing in other worlds)
+  const tide = createTide({ scene, fx, sfx, player, events, now: () => clock, dropItem, drops, expanded });
+  // a tree you (or a lumberjack) can chop: standing, and not under the high tide
+  const choppable = (t) => t.alive && !tide.flooded(t);
+  const { bears, clouds, thrown, spawnBear, hurtBear, updateBears, clingSlow, clingCount, clearExtras } = createBears({
     scene, camera, fx, sfx, player, walls, towers, wallColliders, events, stats, now: () => clock, wave: () => waves.n,
     towerMult, learn, dropItem, resolve, damageWall, damageTower, hurtPlayer, poisonPlayer, victory: onVictory,
+    slowAt: (p) => tide.slowAt(p), helpers,
   });
 
   // Throw an item out of `from` onto the ground as a pickup (`value` for loot bags).
@@ -1336,7 +1353,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
   let victoryT = 0;
   function onVictory() {
     waves.won = true;
-    waves.kingDue = false;
+    waves.finalDue = false;
     waves.timer = waves.total = WAVES.interval;
     victoryT = 2.5;
     events.push({ type: 'victory', wave: waves.n, t: clock });
@@ -1344,8 +1361,10 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
   }
 
   // ---------- Collision ----------
-  function resolve(pos, r, useTrees) {
+  // solidOnly: only walls and towers (the shell bear's rolls go through the camp's small buildings)
+  function resolve(pos, r, useTrees, solidOnly = false) {
     for (const c of colliders) {
+      if (solidOnly && !c.wall && !c.tower) continue;
       const cx = Math.max(c.minX, Math.min(pos.x, c.maxX));
       const cz = Math.max(c.minZ, Math.min(pos.z, c.maxZ));
       const dx = pos.x - cx, dz = pos.z - cz;
@@ -1361,7 +1380,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
         pos.x += pushes[0][0]; pos.z += pushes[0][1];
       }
     }
-    for (const c of circles) pushCircle(pos, r, c.x, c.z, c.r);
+    if (!solidOnly) for (const c of circles) pushCircle(pos, r, c.x, c.z, c.r);
     if (useTrees) for (const t of trees) if (t.alive) pushCircle(pos, r, t.x, t.z, TREE.radius * t.s);
     const d = Math.hypot(pos.x, pos.z);
     if (d > WORLD_R) { pos.x *= WORLD_R / d; pos.z *= WORLD_R / d; }
@@ -1386,6 +1405,20 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     // hurt: fall back under the towers until healed
     // poison never wears off: the campfire comes before everything else
     if (player.poisonT > 0) return CAMPFIRE.clone();
+    // the shell bear: sidestep out of a roll's path, back away from a shell spin (like a player would)
+    const sb = bears.find((b) => b.kind === 'shell' && !b.dying && (b.state === 'curl' || b.state === 'roll' || b.state === 'spin'));
+    if (sb && sb.move === 'roll' && sb.rollDir) {
+      const rx = p.x - sb.pos.x, rz = p.z - sb.pos.z;
+      const ahead = rx * sb.rollDir.x + rz * sb.rollDir.z, side = rx * sb.rollDir.z - rz * sb.rollDir.x;
+      if (ahead > -1 && Math.abs(side) < 3) {
+        const s = side >= 0 ? 1 : -1; // step further out on the side it's already on
+        return new THREE.Vector3(p.x + sb.rollDir.z * s * 3, 0, p.z - sb.rollDir.x * s * 3);
+      }
+    }
+    if (sb && sb.move === 'spin' && dist2d(p, sb.pos) < sb.def.spinRange) {
+      const dx = p.x - sb.pos.x, dz = p.z - sb.pos.z, l = Math.hypot(dx, dz) || 1;
+      return new THREE.Vector3(p.x + (dx / l) * 4, 0, p.z + (dz / l) * 4);
+    }
     // the King's red ring: step out before the slam lands
     const slammer = bears.find((b) => b.slamRing && !b.dying);
     if (slammer) {
@@ -1397,7 +1430,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     }
     // the Bear King hits too hard to trade blows with: below 40% hp, run circles away from him
     // (towers keep shooting) until regen brings you back to 90%, like a player would
-    const king = bears.find((b) => b.kind === 'king' && !b.dying);
+    const king = bears.find((b) => b.def.final && !b.dying);
     if (!king || player.hp >= PLAYER.maxHp * 0.9) auto.kite = false;
     else if (player.hp < PLAYER.maxHp * 0.4) auto.kite = true;
     if (auto.kite) {
@@ -1410,10 +1443,15 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
       if (r > WORLD_R - 3) goal.multiplyScalar((WORLD_R - 3) / r);
       return goal;
     }
+    // monkeys on your back: head for the water to shake them off (if the tide is close enough)
+    if (clingCount(player) >= 2) {
+      const reach = H + tide.level() + 1.5, l = Math.hypot(p.x, p.z) || 1;
+      if (reach < WORLD_R - 1) return new THREE.Vector3((p.x / l) * reach, 0, (p.z / l) * reach);
+    }
     if (player.hp < PLAYER.maxHp * 0.45 && bearDist < 7) return new THREE.Vector3(0, 0, 3.1);
     if (bearDist < 5) return nearestBear.pos;
     // the log thrower stays out of tower range: go get it
-    const thrower = bears.find((b) => b.kind === 'thrower' && !b.dying);
+    const thrower = bears.find((b) => b.def.range && b.def.throws !== 'monkey' && !b.dying);
     if (thrower && player.hp > PLAYER.maxHp * 0.6) return thrower.pos;
     const full = stackFree(c) <= 0;
     const logs = countOf(c, 'log');
@@ -1461,7 +1499,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     if (woodpile.count > 0 && !full && logZone) return spots.woodpile();
     if (drop && !full) return drop.pos;
     if (!full) {
-      const tree = trees.filter((t) => t.alive && !t.claim).sort((a, b) => dist2d(a, p) - dist2d(b, p))[0];
+      const tree = trees.filter((t) => choppable(t) && !t.claim).sort((a, b) => dist2d(a, p) - dist2d(b, p))[0];
       if (tree) return new THREE.Vector3(tree.x, 0, tree.z);
     }
     return logZone ? new THREE.Vector3(logZone.def.x, 0, logZone.def.z) : null;
@@ -1486,7 +1524,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
   const padName = (z) => (z.def.icon ? tr('tip.upgradeName', { name: tName(z.def.name) }) : tName(z.def.name));
   const nearestTree = () => {
     const p = player.pos;
-    const t = trees.filter((x) => x.alive).sort((a, b) => dist2d(a, p) - dist2d(b, p))[0];
+    const t = trees.filter(choppable).sort((a, b) => dist2d(a, p) - dist2d(b, p))[0];
     return t ? new THREE.Vector3(t.x, 0, t.z) : null;
   };
 
@@ -1525,6 +1563,13 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     if (poisoner) tips.push({ key: 'bossPoison', info: 8, icon: '🤢', text: tr('tip.bossPoison'), pos: poisoner.pos.clone() });
     const king = alive('king');
     if (king) tips.push({ key: 'bossKing', info: 8, icon: '👑', text: tr('tip.bossKing'), pos: king.pos.clone() });
+    const coco = alive('coco');
+    if (coco) tips.push({ key: 'bossCoco', info: 8, icon: '🥥', text: tr('tip.bossCoco'), pos: coco.pos.clone() });
+    const chief = alive('monkey');
+    if (chief || clingCount(P)) tips.push({ key: 'bossMonkey', info: 8, icon: '🐒', text: tr('tip.bossMonkey'), pos: chief?.pos.clone() });
+    const shellBear = alive('shell');
+    if (shellBear) tips.push({ key: 'bossShell', info: 8, icon: '🐚', text: tr('tip.bossShell'), pos: shellBear.pos.clone() });
+    if (tide.high()) tips.push({ key: 'tide', info: 7, icon: '🌊', text: tr('tip.tide') });
     const loot = drops.find((d) => d.type === 'loot');
     if (loot) tips.push({ key: 'loot', icon: '💰', text: tr('tip.loot'), pos: loot.pos.clone() });
     const armorPad = upgrades.find((u) => u.def.id === 'armor' && u.state === 'open');
@@ -1551,6 +1596,9 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     if (meat && grill.built) tips.push({ key: 'grill', icon: '🔥', text: tr('tip.grill'), pos: grill.pos.clone() });
     if (grill.out > 0 && stackFree(c) > 0 && !helpers.some((h) => h.kind === 'cashier')) tips.push({ key: 'grillTake', icon: '🍖', text: tr('tip.grillTake'), pos: spots.grillOut() });
     if ((meat || steaks) && counter.built) tips.push({ key: 'sell', icon: '🥩', text: tr('tip.sell'), pos: counter.pos.clone() });
+    // the axe falls behind the bears (they'd take 3 hits or more): comes back every time it does (never "learned")
+    const axePad = upgrades.find((u) => u.def.id === 'axe' && u.state === 'open');
+    if (axePad && BEAR.hp * WAVES.hpScale(Math.max(1, waves.n)) > 2 * PLAYER.damage(levels.axe)) tips.push({ key: 'axeBehind', icon: '🪓', text: tr('tip.axe'), pos: padPos(axePad) });
 
     const byLeft = (a, b) => (a.total - a.paid) - (b.total - b.paid);
     const cashPads = [...zones, ...upgrades].filter((z) => z.state === 'open' && z.currency === 'cash');
@@ -1559,6 +1607,8 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
 
     const openLog = zones.filter((z) => z.state === 'open' && z.currency === 'log');
     const logZone = openLog.find((z) => z.def.kind === 'grill') || openLog[0];
+    // why the grill matters, as soon as its square shows up (until it's built)
+    if (logZone?.def.kind === 'grill') tips.push({ key: 'grillBuild', icon: '🔥', text: tr('tip.grillBuild'), pos: padPos(logZone) });
     if (logZone && logs > 0) tips.push({ key: 'build', icon: '🪵', text: tr('tip.build', { name: tName(logZone.def.name) }), pos: padPos(logZone) });
     if (logZone && woodpile.count > 0) tips.push({ key: 'woodpile', icon: '🪵', text: tr('tip.woodpile'), pos: woodpile.pos.clone() });
     if (counter.built && logs > logsNeeded()) tips.push({ key: 'spareWood', icon: '🪵', text: tr('tip.spareWood'), pos: counter.pos.clone() });
@@ -1667,10 +1717,11 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     }
     P.stillT = Math.hypot(mx, mz) > 0.1 ? 0 : (P.stillT || 0) + dt;
     const bx = P.pos.x, bz = P.pos.z;
-    P.vel.set(mx * PLAYER.speed, 0, mz * PLAYER.speed);
+    const wade = tide.slowAt(P.pos) * clingSlow(P); // wading in the high tide (and monkeys on your back) slow you down
+    P.vel.set(mx * PLAYER.speed * wade, 0, mz * PLAYER.speed * wade);
     P.pos.addScaledVector(P.vel, dt);
     resolve(P.pos, PLAYER.radius, true);
-    if (autoDriving) trackStuck(P, bx, bz, Math.hypot(mx, mz) * PLAYER.speed * dt, dt);
+    if (autoDriving) trackStuck(P, bx, bz, Math.hypot(mx, mz) * PLAYER.speed * wade * dt, dt);
     const moving = P.vel.lengthSq() > 0.1;
 
     // --- auto action: attack bears first, otherwise chop trees ---
@@ -1685,7 +1736,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     if (!target) {
       best = PLAYER.chopRange;
       for (const t of trees) {
-        if (!t.alive) continue;
+        if (!choppable(t)) continue;
         const d = Math.hypot(t.x - P.pos.x, t.z - P.pos.z);
         if (d < best) { best = d; target = t; targetKind = 'tree'; }
       }
@@ -1838,6 +1889,8 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     // --- workers, bears, towers ---
     for (const h of helpers) updateHelper(h, dt);
     updateBears(dt);
+    tide.update(dt);
+    if (world().gimmick === 'tide') hud.setTide(tide.fraction(), tide.rising());
     updateTowers(dt);
     updateBallistaUpgrades(dt);
 
@@ -1845,8 +1898,15 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     if (!P.dead) updateWaves(dt);
     const aliveBears = bears.filter((b) => !b.dying).length;
     // before the map is won the title counts toward the final wave (WAVE 7/15)
-    const of = (k) => (!waves.won && k <= WORLD.finalWave ? `${k}/${WORLD.finalWave}` : String(k));
+    const last = world().finalWave;
+    const of = (k) => (!waves.won && k <= last ? `${k}/${last}` : String(k));
     hud.setWave(aliveBears > 0 ? tr('hud.wave', { n: of(waves.n), bears: aliveBears }) : tr('hud.nextWave', { n: of(waves.n + 1), s: Math.ceil(waves.timer) }), 1 - waves.timer / waves.total);
+    // the free bag levels, said once when the camp starts
+    if (bonusNotice && clock > 1.5) {
+      fx.text(player.pos.clone().setY(3), tr('fx.freeBag', { n: bonusNotice }), 'cash', { life: 2.2, rise: 70 });
+      sfx.play('levelup');
+      bonusNotice = 0;
+    }
     if (victoryT > 0) {
       victoryT -= dt;
       if (victoryT <= 0) hud.victory({ waves: waves.n });
@@ -1899,6 +1959,7 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     P.c.stack.length = 0;
     layoutStack(P.c);
     for (const b of bears) { scene.remove(b.obj, b.bar); if (b.armorBar) scene.remove(b.armorBar); if (b.slamRing) scene.remove(b.slamRing); }
+    clearExtras(); // monkeys, sharp shells
     bears.length = 0;
     waves.queue.length = 0;
     waves.timer = waves.total = 20;
@@ -1909,6 +1970,14 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
   refreshUnlocks();
   setCash(0);
   const loaded = load();
+  // free bag levels from the worlds beaten before this one (also given to a camp saved before it had them)
+  let bonusNotice = 0;
+  const bagUp = upgrades.find((u) => u.def.id === 'bag');
+  if (bagBonus > levels.bag) {
+    bonusNotice = bagBonus - levels.bag;
+    levels.bag = bagUp.level = bagBonus;
+    applyLevel(bagUp);
+  }
   layoutStack(player.c);
 
   return {
@@ -1916,6 +1985,8 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     get cash() { return cash; },
     set cash(v) { setCash(v); },
     get wave() { return waves.n; },
+    tide, // the island's tide (tests: tide.level())
+    monkeysOn: (h = player) => clingCount(h), // monkeys clinging to you (or a worker)
     get won() { return waves.won; },
     waves,
     skipToWave() { waves.timer = 0.01; waves.stretched = true; },
@@ -1929,12 +2000,12 @@ export function createGame({ scene, camera, fx, input, hud, labelsEl, useSave = 
     // build every square (or the listed ids) at once: layout checks and footage of a full camp
     buildAll(ids) { for (const z of zones) if (z.state !== 'built' && (!ids || ids.includes(z.def.id))) construct(z, true); },
     // playtest the final fight (in a ?slot=test tab): a full camp with about the gear of wave 14
-    // (axe LV15, bag LV10), then wave 15 and the Bear King start right away
+    // (axe LV15, bag LV10), then the final wave and its boss start right away
     testFinal() {
       this.buildAll();
       refreshUnlocks();
       for (const u of upgrades) if (u.def.id !== 'armor') { u.level = levels[u.def.id] = u.def.id === 'axe' ? 14 : 9; applyLevel(u); }
-      waves.n = 14; waves.won = false; waves.kingDue = false;
+      waves.n = world().finalWave - 1; waves.won = false; waves.finalDue = false;
       waves.timer = 0.01; waves.stretched = true;
       player.hp = PLAYER.maxHp;
     },

@@ -3,6 +3,8 @@
 import * as THREE from 'three';
 import { CAMP_HALF } from './config.js';
 
+import { world } from './worlds.js';
+
 const mat = (color, extra = {}) => new THREE.MeshLambertMaterial({ color, ...extra });
 
 export const M = {
@@ -36,6 +38,17 @@ export const M = {
   eyeRed: new THREE.MeshBasicMaterial({ color: 0xff3b30 }),
 };
 
+// island outfits and plants
+const SHIRT = mat(0xdcc79c), SHIRT_PATCH = mat(0xb39a6a), STRAW = mat(0xe6c770);
+const SAND_FUR = mat(0xd9a75c), SAND_FUR_DARK = mat(0xc28c45), SAND_MARK = mat(0x6e4220);
+const SAND_EYE = new THREE.MeshBasicMaterial({ color: 0xff8a1a });
+// island bosses: crab-shell armor, the coconut thrower's bandana, the shell bear's shell, monkeys
+const CRAB = mat(0xe0563a), CRAB_RIM = mat(0xf2925e), BANDANA = mat(0x2f8fd8);
+const SHELL = mat(0xf6dcc0), SHELL_STRIPE = mat(0xd9825a);
+const MONKEY_FUR = mat(0x7a4a2a), MONKEY_FACE = mat(0xf0c9a0);
+const CHIEF_FUR = mat(0xd0702e), CHIEF_BELLY = mat(0xe8a868), CHIEF_DARK = mat(0x5a3018);
+const PALM_LEAF = mat(0x4caa52), PALM_LEAF_DARK = mat(0x358a40), PALM_RING = mat(0x7a5a38), COCONUT = mat(0x6b4423);
+
 const G = {
   box: new THREE.BoxGeometry(1, 1, 1),
   sphere: new THREE.SphereGeometry(1, 16, 12),
@@ -46,6 +59,23 @@ const G = {
   cone4: new THREE.ConeGeometry(1, 1, 4),
   capsule: new THREE.CapsuleGeometry(1, 1, 4, 12),
 };
+
+// ---------- World looks (src/worlds.js) ----------
+// Builders follow the current world's look unless told otherwise (the Asset Studio asks for each look).
+const look = () => world().look;
+// The camp's shared materials are recolored once at startup for the world being played.
+const CAMP = {
+  wood: { plank: 0xd09a5e, wood: 0xb57a3f, woodDark: 0x7d4a22, roof: 0xc2473b, bark: 0x8a5328, logEnd: 0xe7c08a, rock: 0x9aa7b3,
+    floor: ['#d19b5f', '#cc945a', '#d6a268', '#9c6a36'] },
+  // bamboo poles, thatch roofs, palm wood, sandstone
+  // (darker than the sand and a little green, so the camp stands out from the beach)
+  bamboo: { plank: 0xc29e52, wood: 0x9fb04a, woodDark: 0x5f6a25, roof: 0xd9b25c, bark: 0x9a7448, logEnd: 0xead39c, rock: 0xb9a98c,
+    floor: ['#b8954c', '#ae8b44', '#c19e55', '#7a6128'] },
+};
+export function applyWorldLook(l = look()) {
+  const c = CAMP[l.camp] || CAMP.wood;
+  for (const k of ['plank', 'wood', 'woodDark', 'roof', 'bark', 'logEnd', 'rock']) M[k].color.setHex(c[k]);
+}
 
 function part(geo, material, sx, sy, sz, x = 0, y = 0, z = 0) {
   const m = new THREE.Mesh(geo, material);
@@ -58,18 +88,33 @@ function part(geo, material, sx, sy, sz, x = 0, y = 0, z = 0) {
 
 // ---------- Player: our own lumberjack (orange beanie, blue parka, big beard) ----------
 // Workers reuse the same body with other colors, a hard hat and no beard.
+// outfit: 'parka' (polar) or 'castaway' (island: torn beige shirt, shorts, straw hat, bare legs).
+// Castaway workers keep their role color on the shorts and the hat band.
 export function makePlayer(opts = {}) {
   const worker = !!opts.parka;
-  const parka = worker ? mat(opts.parka) : M.parka;
+  const castaway = (opts.outfit ?? look().outfit) === 'castaway';
+  const parka = castaway ? SHIRT : worker ? mat(opts.parka) : M.parka;
   const parkaDark = worker ? mat(opts.parkaDark) : M.parkaDark;
   const root = new THREE.Group();
   const body = new THREE.Group();
   root.add(body);
 
-  const legL = part(G.box, parkaDark, 0.2, 0.45, 0.24, -0.15, 0.23, 0);
-  const legR = part(G.box, parkaDark, 0.2, 0.45, 0.24, 0.15, 0.23, 0);
+  const legMat = castaway ? M.skin : parkaDark;
+  const legL = part(G.box, legMat, 0.2, 0.45, 0.24, -0.15, 0.23, 0);
+  const legR = part(G.box, legMat, 0.2, 0.45, 0.24, 0.15, 0.23, 0);
   body.add(legL, legR);
   body.add(part(G.capsule, parka, 0.36, 0.36, 0.3, 0, 0.82, 0));
+  if (castaway) {
+    // shorts (the player's in blue, workers' in their role color), a torn hem and a patch
+    body.add(part(G.box, worker ? mat(opts.parka) : M.parka, 0.62, 0.28, 0.38, 0, 0.4, 0));
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      const tooth = part(G.cone4, SHIRT, 0.07, 0.14, 0.07, Math.sin(a) * 0.33, 0.5, Math.cos(a) * 0.28);
+      tooth.rotation.x = Math.PI; // points down
+      body.add(tooth);
+    }
+    body.add(part(G.box, SHIRT_PATCH, 0.14, 0.14, 0.04, -0.12, 0.9, 0.29));
+  }
   body.add(part(G.box, M.woodDark, 0.74, 0.08, 0.62, 0, 0.62, 0)); // belt
 
   const head = new THREE.Group();
@@ -79,7 +124,12 @@ export function makePlayer(opts = {}) {
   head.add(part(G.sphere, M.black, 0.035, 0.045, 0.03, -0.09, 0.05, 0.25));
   head.add(part(G.sphere, M.black, 0.035, 0.045, 0.03, 0.09, 0.05, 0.25));
   head.add(part(G.sphere, M.skin, 0.06, 0.05, 0.05, 0, -0.01, 0.27)); // nose
-  if (worker) {
+  if (castaway) {
+    // straw hat with a colored band (orange for the player, the role color for workers)
+    head.add(part(G.cyl, STRAW, 0.48, 0.03, 0.48, 0, 0.13, 0)); // wide brim
+    head.add(part(G.cyl, STRAW, 0.24, 0.18, 0.24, 0, 0.24, 0));
+    head.add(part(G.cyl, worker ? mat(opts.hat) : M.beanie, 0.25, 0.05, 0.25, 0, 0.18, 0));
+  } else if (worker) {
     const hat = mat(opts.hat);
     head.add(part(G.sphere, hat, 0.3, 0.2, 0.3, 0, 0.1, 0)); // hard hat dome
     head.add(part(G.cyl, hat, 0.36, 0.03, 0.36, 0, 0.08, 0.03)); // brim
@@ -115,15 +165,56 @@ export function makePlayer(opts = {}) {
 }
 
 // ---------- Environment ----------
-export function makeTree() {
+// kind: 'pine' (polar, snow on the tiers) or 'palm' (island). userData.top shakes when chopped.
+export function makeTree(kind = look().tree) {
+  if (kind === 'palm') return makePalm();
   const g = new THREE.Group();
   const top = new THREE.Group();
   g.add(part(G.cylLo, M.bark, 0.2, 0.8, 0.2, 0, 0.4, 0));
   const tiers = [[0.95, 1.1, 1.05], [0.75, 0.95, 1.65], [0.5, 0.8, 2.2]];
   tiers.forEach(([r, h, y], i) => {
     top.add(part(G.cone, i % 2 ? M.pineDark : M.pine, r, h, r, 0, y, 0));
-    top.add(part(G.cone, M.snow, r * 0.55, h * 0.45, r * 0.55, 0, y + h * 0.3, 0));
+    if (look().snowCaps) top.add(part(G.cone, M.snow, r * 0.55, h * 0.45, r * 0.55, 0, y + h * 0.3, 0));
   });
+  g.add(top);
+  g.userData.top = top;
+  return g;
+}
+
+// Palm tree: a leaning ringed trunk, a crown of drooping leaves and three coconuts.
+function makePalm() {
+  const g = new THREE.Group();
+  const top = new THREE.Group();
+  let x = 0;
+  for (let i = 0; i < 5; i++) {
+    const seg = part(G.cylLo, i % 2 ? PALM_RING : M.bark, 0.2 - i * 0.015, 0.46, 0.2 - i * 0.015, x, 0.23 + i * 0.44, 0);
+    seg.rotation.z = -0.06 * i;
+    top.add(seg);
+    x += 0.03 * i; // the trunk leans more toward the top
+  }
+  const crown = new THREE.Group();
+  crown.position.set(x, 2.3, 0);
+  crown.scale.setScalar(0.9);
+  for (let i = 0; i < 7; i++) {
+    const leafMat = i % 2 ? PALM_LEAF : PALM_LEAF_DARK;
+    const leaf = new THREE.Group();
+    leaf.rotation.y = (i / 7) * Math.PI * 2 + 0.3;
+    const inner = new THREE.Group();
+    inner.rotation.x = -0.35; // the leaf rises a little, then its tip droops
+    inner.add(part(G.box, leafMat, 0.34, 0.04, 0.8, 0, 0, 0.4));
+    const tip = new THREE.Group();
+    tip.position.z = 0.78;
+    tip.rotation.x = 0.9;
+    tip.add(part(G.box, leafMat, 0.26, 0.04, 0.7, 0, 0, 0.33));
+    inner.add(tip);
+    leaf.add(inner);
+    crown.add(leaf);
+  }
+  for (let i = 0; i < 3; i++) {
+    const a = (i / 3) * Math.PI * 2;
+    crown.add(part(G.sphereLo, COCONUT, 0.12, 0.12, 0.12, Math.cos(a) * 0.16, -0.12, Math.sin(a) * 0.16));
+  }
+  top.add(crown);
   g.add(top);
   g.userData.top = top;
   return g;
@@ -139,7 +230,7 @@ export function makeStump() {
 export function makeRock(s = 1) {
   const g = new THREE.Group();
   g.add(part(G.sphereLo, M.rock, 0.6 * s, 0.4 * s, 0.5 * s, 0, 0.1 * s, 0));
-  g.add(part(G.sphereLo, M.snow, 0.45 * s, 0.18 * s, 0.38 * s, 0, 0.35 * s, 0));
+  if (look().snowCaps) g.add(part(G.sphereLo, M.snow, 0.45 * s, 0.18 * s, 0.38 * s, 0, 0.35 * s, 0));
   return g;
 }
 
@@ -166,11 +257,11 @@ export function makeCampfire() {
 
 export function makeTent() {
   const g = new THREE.Group();
-  const cloth = part(G.cone4, mat(0x3f8fc7), 1.3, 1.5, 1.3, 0, 0.75, 0);
+  const cloth = part(G.cone4, mat(look().tent), 1.3, 1.5, 1.3, 0, 0.75, 0);
   cloth.rotation.y = Math.PI / 4;
   g.add(cloth);
   g.add(part(G.box, M.black, 0.5, 0.7, 0.05, 0, 0.35, 0.62));
-  g.add(part(G.cone4, M.snow, 0.55, 0.4, 0.55, 0, 1.35, 0));
+  if (look().snowCaps) g.add(part(G.cone4, M.snow, 0.55, 0.4, 0.55, 0, 1.35, 0));
   return g;
 }
 
@@ -179,14 +270,15 @@ export function makeCampFloor(width = CAMP_HALF * 2, depth = CAMP_HALF * 2) {
   const c = document.createElement('canvas');
   c.width = c.height = 512;
   const x = c.getContext('2d');
-  x.fillStyle = '#d19b5f';
+  const [base, odd, even, line] = (CAMP[look().camp] || CAMP.wood).floor;
+  x.fillStyle = base;
   x.fillRect(0, 0, 512, 512);
   const rows = 12, h = 512 / rows;
   for (let r = 0; r < rows; r++) {
     const off = (r % 2) * 90;
-    x.fillStyle = r % 2 ? '#cc945a' : '#d6a268';
+    x.fillStyle = r % 2 ? odd : even;
     x.fillRect(0, r * h + 2, 512, h - 4);
-    x.fillStyle = '#9c6a36';
+    x.fillStyle = line;
     x.fillRect(0, r * h, 512, 3);
     for (let s = -off; s < 512; s += 180) x.fillRect(s, r * h, 3, h);
   }
@@ -319,7 +411,8 @@ export function makeCash() {
 }
 
 // ---------- Bears ----------
-// variant: 'normal' | 'mega' | 'armored' | 'poison' | 'thrower' | 'king'
+// variant: 'normal' | 'mega' | 'armored' | 'poison' | 'thrower' | 'king' (polar)
+//          | 'coco' | 'monkey' | 'shell' (island; with the sand look, 'armored' wears crab shell)
 const furFor = {
   normal: M.bear, mega: M.bearMega, armored: M.bear, thrower: mat(0xf1e9da),
   poison: mat(0x9be36b),
@@ -331,20 +424,24 @@ const CAPE_GEO = new THREE.CylinderGeometry(1, 1, 1, 18, 1, true, Math.PI * 0.4,
 // the Bear King's ice armor: translucent so it reads as ice, not steel
 const ICE = mat(0xa8e4ff, { transparent: true, opacity: 0.82, emissive: 0x1b4d66 });
 
-export function makeBear(variant = 'normal') {
+// outfit: null (polar bears), or 'sand' (island sand bears: sandy fur, bright orange eyes and
+// palm-brown markings from the back up to the face; the bosses keep their red eyes)
+export function makeBear(variant = 'normal', outfit = look().bearOutfit) {
+  if (variant === 'monkey') return makeMonkeyChief();
+  const sand = outfit === 'sand';
   const mega = variant !== 'normal';
   const root = new THREE.Group();
   root.userData = {};
   const body = new THREE.Group();
   root.add(body);
-  const fur = furFor[variant] || M.bear;
+  const fur = sand && variant !== 'poison' ? (variant === 'mega' ? SAND_FUR_DARK : SAND_FUR) : furFor[variant] || M.bear;
   body.add(part(G.sphere, fur, 0.55, 0.48, 0.8, 0, 0.75, 0));
   const head = new THREE.Group();
   head.position.set(0, 0.95, 0.75);
   head.add(part(G.sphere, fur, 0.36, 0.33, 0.38));
   head.add(part(G.sphere, fur, 0.18, 0.15, 0.2, 0, -0.07, 0.32));
   head.add(part(G.sphere, M.bearNose, 0.07, 0.055, 0.05, 0, -0.02, 0.5));
-  const eye = mega ? M.eyeRed : M.black;
+  const eye = mega ? M.eyeRed : sand ? SAND_EYE : M.black;
   head.add(part(G.sphere, eye, 0.045, 0.045, 0.04, -0.14, 0.1, 0.32));
   head.add(part(G.sphere, eye, 0.045, 0.045, 0.04, 0.14, 0.1, 0.32));
   head.add(part(G.sphere, fur, 0.1, 0.1, 0.06, -0.24, 0.26, 0));
@@ -356,16 +453,40 @@ export function makeBear(variant = 'normal') {
     body.add(leg);
     legs.push(leg);
   }
+  if (sand) {
+    // markings sit on the body's surface (an ellipsoid 0.55 × 0.48 × 0.8 centered at y 0.75)
+    const top = (z) => 0.75 + 0.48 * Math.sqrt(Math.max(0, 1 - (z / 0.8) ** 2));
+    for (const z of [-0.55, -0.3, -0.05, 0.2, 0.42]) body.add(part(G.sphereLo, SAND_MARK, 0.11, 0.03, 0.15, 0, top(z) - 0.015, z)); // spine
+    for (const z of [-0.4, -0.1, 0.2]) {
+      // stripes down the flanks, like the rings of a palm trunk
+      const k = Math.sqrt(1 - (z / 0.8) ** 2), a = 0.85;
+      for (const side of [-1, 1]) {
+        // long along the flank, thin along the surface normal so it lies flat on the fur
+        const m = part(G.sphereLo, SAND_MARK, 0.17, 0.03, 0.09, side * 0.55 * Math.sin(a) * k * 0.99, 0.75 + 0.48 * Math.cos(a) * k * 0.99, z);
+        m.rotation.z = -side * a;
+        body.add(m);
+      }
+    }
+    // the stripe climbs over the head to the forehead, and two tear marks under the eyes
+    head.add(part(G.sphereLo, SAND_MARK, 0.08, 0.04, 0.2, 0, 0.3, 0.02));
+    for (const x of [-0.13, 0.13]) {
+      const t = part(G.sphereLo, SAND_MARK, 0.035, 0.08, 0.03, x * 1.05, -0.03, 0.31);
+      t.rotation.z = x > 0 ? 0.35 : -0.35;
+      head.add(t);
+    }
+  }
   const plates = [];
   let heldLog = null;
   if (variant === 'armored') {
-    const steel = mat(0x8e9aa6), rivet = mat(0x5b6570);
+    // steel on the polar map, crab shell on the island
+    const steel = sand ? CRAB : mat(0x8e9aa6), rivet = sand ? CRAB_RIM : mat(0x5b6570);
     // helmet
     head.add(part(G.sphere, steel, 0.39, 0.2, 0.41, 0, 0.14, -0.02));
     head.add(part(G.box, rivet, 0.06, 0.06, 0.3, 0, 0.3, 0.1));
     // three back plates, knocked off one by one by the axe
     for (const z of [0.35, 0, -0.35]) {
-      const p = part(G.box, steel, 0.95, 0.12, 0.34, 0, 1.2, z);
+      const p = sand ? part(G.sphere, steel, 0.55, 0.17, 0.22, 0, 1.17, z) : part(G.box, steel, 0.95, 0.12, 0.34, 0, 1.2, z);
+      if (sand) p.add(part(G.sphere, rivet, 0.85, 0.5, 0.85, 0, 0.35, 0)); // lighter top of each shell plate
       p.rotation.x = z * 0.25;
       body.add(p);
       plates.push(p);
@@ -382,6 +503,32 @@ export function makeBear(variant = 'normal') {
     heldLog.position.set(0, 1.15, 0.65);
     heldLog.scale.setScalar(1.2);
     body.add(heldLog);
+  } else if (variant === 'coco') {
+    // island coconut thrower: a blue bandana and a coconut held in its front paws
+    head.add(part(G.cyl, BANDANA, 0.37, 0.07, 0.37, 0, 0.17, 0));
+    head.add(part(G.box, BANDANA, 0.06, 0.18, 0.04, 0.12, 0.08, -0.36));
+    heldLog = makeCoconut();
+    heldLog.position.set(0, 1.45, 1.0);
+    heldLog.scale.setScalar(1.4);
+    body.add(heldLog);
+  } else if (variant === 'shell') {
+    // island final boss: a giant striped shell on its back. It curls up inside to roll into the
+    // walls (bears.js moves `shell`), and the shell breaks for good in phase 2.
+    const shell = new THREE.Group();
+    shell.position.set(0, 1.25, -0.15);
+    shell.add(part(G.sphere, SHELL, 0.7, 0.78, 0.82));
+    // a snail spiral on each side: dots winding in two turns toward the middle of the side
+    for (const side of [-1, 1]) {
+      for (let i = 0; i < 34; i++) {
+        const k = i / 33, a = k * Math.PI * 4, r = 0.68 * (1 - k * 0.92);
+        const y = Math.sin(a) * r * 0.95, z = Math.cos(a) * r;
+        const x = side * 0.7 * Math.sqrt(Math.max(0.04, 1 - (y / 0.78) ** 2 - (z / 0.82) ** 2));
+        shell.add(part(G.sphereLo, SHELL_STRIPE, 0.07 - k * 0.03, 0.07 - k * 0.03, 0.07 - k * 0.03, x, y, z));
+      }
+      shell.add(part(G.sphere, SHELL_STRIPE, 0.1, 0.14, 0.14, side * 0.69, 0, 0)); // the spiral's eye
+    }
+    body.add(shell);
+    root.userData.shell = shell;
   } else if (variant === 'king') {
     // World 1 final boss: a gold crown, a royal cape with a white fur collar, and ice armor
     // (two shoulder chunks and a chest plate) that the axe or a ballista breaks off one by one.
@@ -423,6 +570,102 @@ export function makeBear(variant = 'normal') {
     root.userData.cape = capePivot;
   }
   root.userData = { ...root.userData, body, head, legs, plates, heldLog };
+  return root;
+}
+
+// Coconut: held and thrown by the island's coconut thrower.
+export function makeCoconut() {
+  const g = new THREE.Group();
+  g.add(part(G.sphereLo, COCONUT, 0.2, 0.19, 0.2));
+  for (const a of [0, 2.1, 4.2]) g.add(part(G.sphereLo, M.black, 0.035, 0.035, 0.02, Math.cos(a) * 0.07, 0.17, Math.sin(a) * 0.07));
+  return g;
+}
+
+// Sharp shell: fired in rings by the shell bear's spin (points forward, +z).
+export function makeSharpShell() {
+  const g = new THREE.Group();
+  const cone = part(G.cone, SHELL, 0.16, 0.5, 0.16);
+  cone.rotation.x = Math.PI / 2;
+  g.add(cone);
+  const band = part(G.cylLo, SHELL_STRIPE, 0.13, 0.06, 0.13, 0, 0, -0.08);
+  band.rotation.x = Math.PI / 2;
+  g.add(band);
+  return g;
+}
+
+// Small monkey: thrown by the monkey chief; clings to the player or a worker (arms reaching forward).
+export function makeSmallMonkey() {
+  const g = new THREE.Group();
+  const body = new THREE.Group();
+  g.add(body);
+  body.add(part(G.sphere, MONKEY_FUR, 0.17, 0.2, 0.15, 0, 0.28, 0));
+  body.add(part(G.sphere, MONKEY_FACE, 0.11, 0.13, 0.05, 0, 0.27, 0.12)); // belly
+  const head = new THREE.Group();
+  head.position.set(0, 0.55, 0.03);
+  head.add(part(G.sphere, MONKEY_FUR, 0.15, 0.14, 0.14));
+  head.add(part(G.sphere, MONKEY_FACE, 0.11, 0.1, 0.06, 0, -0.02, 0.1));
+  for (const x of [-0.05, 0.05]) head.add(part(G.sphere, M.black, 0.02, 0.025, 0.02, x, 0.02, 0.15));
+  for (const x of [-0.15, 0.15]) head.add(part(G.sphere, MONKEY_FACE, 0.05, 0.06, 0.03, x, 0.02, 0));
+  body.add(head);
+  const arms = [];
+  for (const x of [-0.13, 0.13]) {
+    const arm = new THREE.Group();
+    arm.position.set(x, 0.38, 0.05);
+    arm.add(part(G.capsule, MONKEY_FUR, 0.04, 0.16, 0.04, 0, -0.12, 0));
+    arm.rotation.x = -1.2; // reaching forward
+    body.add(arm);
+    arms.push(arm);
+  }
+  for (const x of [-0.08, 0.08]) body.add(part(G.capsule, MONKEY_FUR, 0.045, 0.1, 0.045, x, 0.1, 0.02));
+  // curly tail
+  [[0, 0.18, -0.16], [0, 0.3, -0.27], [0, 0.45, -0.3], [0, 0.55, -0.24]].forEach(([x, y, z]) => body.add(part(G.sphereLo, MONKEY_FUR, 0.04, 0.04, 0.04, x, y, z)));
+  g.userData = { body, head, arms };
+  return g;
+}
+
+// Monkey chief (island boss, replaces the poison bear): a big orange monkey with long arms and a
+// leaf crown. It keeps its distance and throws small monkeys; `heldLog` is the one it's about to throw.
+function makeMonkeyChief() {
+  const root = new THREE.Group();
+  const body = new THREE.Group();
+  root.add(body);
+  const legs = [];
+  for (const x of [-0.22, 0.22]) {
+    const leg = part(G.cylLo, CHIEF_FUR, 0.15, 0.55, 0.15, x, 0.28, 0);
+    body.add(leg);
+    legs.push(leg);
+  }
+  body.add(part(G.sphere, CHIEF_FUR, 0.52, 0.58, 0.44, 0, 1.0, 0));
+  body.add(part(G.sphere, CHIEF_BELLY, 0.36, 0.42, 0.2, 0, 0.95, 0.28));
+  const head = new THREE.Group();
+  head.position.set(0, 1.72, 0.08);
+  head.add(part(G.sphere, CHIEF_FUR, 0.34, 0.32, 0.32));
+  head.add(part(G.sphere, MONKEY_FACE, 0.26, 0.24, 0.12, 0, -0.04, 0.24)); // face
+  head.add(part(G.box, CHIEF_DARK, 0.4, 0.06, 0.08, 0, 0.1, 0.3)); // brow
+  for (const x of [-0.1, 0.1]) head.add(part(G.sphere, M.eyeRed, 0.04, 0.04, 0.03, x, 0.03, 0.34));
+  head.add(part(G.box, CHIEF_DARK, 0.14, 0.03, 0.03, 0, -0.14, 0.35)); // mouth
+  for (const x of [-0.33, 0.33]) head.add(part(G.sphere, MONKEY_FACE, 0.09, 0.11, 0.05, x, 0.02, 0));
+  // leaf crown
+  head.add(part(G.cyl, PALM_LEAF_DARK, 0.33, 0.06, 0.33, 0, 0.2, 0));
+  for (const a of [-0.5, 0, 0.5]) {
+    const leaf = part(G.box, PALM_LEAF, 0.1, 0.32, 0.03, Math.sin(a) * 0.3, 0.38, Math.cos(a) * 0.3);
+    leaf.rotation.z = -a * 0.6;
+    head.add(leaf);
+  }
+  body.add(head);
+  // long arms hanging to the ground (they swing with the legs when it walks)
+  for (const x of [-0.58, 0.58]) {
+    const arm = new THREE.Group();
+    arm.position.set(x, 1.3, 0.05);
+    arm.add(part(G.capsule, CHIEF_FUR, 0.12, 0.7, 0.12, 0, -0.5, 0));
+    arm.add(part(G.sphere, CHIEF_DARK, 0.12, 0.1, 0.12, 0, -0.98, 0.04)); // hands
+    body.add(arm);
+    legs.push(arm);
+  }
+  const held = makeSmallMonkey();
+  held.position.set(0, 0.55, 0.62);
+  body.add(held);
+  root.userData = { body, head, legs, plates: [], heldLog: held };
   return root;
 }
 
@@ -553,8 +796,13 @@ export function makeWall(line) {
       const h = 1.35 + ((Math.sin(t * 12.9898 + line.at) * 43758.5453) % 1 + 1) % 1 * 0.3;
       const stake = new THREE.Group();
       stake.add(part(G.cylLo, M.wood, 0.17, h, 0.17, 0, h / 2, 0));
-      stake.add(part(G.cone, M.wood, 0.17, 0.32, 0.17, 0, h + 0.16, 0));
-      stake.add(part(G.cylLo, M.snow, 0.17, 0.06, 0.17, 0, h - 0.02, 0));
+      if (look().camp === 'bamboo') {
+        // bamboo pole: dark rings at the nodes, cut flat on top
+        for (const k of [0.33, 0.66, 1]) stake.add(part(G.cylLo, M.woodDark, 0.18, 0.05, 0.18, 0, h * k - 0.02, 0));
+      } else {
+        stake.add(part(G.cone, M.wood, 0.17, 0.32, 0.17, 0, h + 0.16, 0));
+        if (look().snowCaps) stake.add(part(G.cylLo, M.snow, 0.17, 0.06, 0.17, 0, h - 0.02, 0));
+      }
       if (alongX) stake.position.set(t, 0, line.at); else stake.position.set(line.at, 0, t);
       g.add(stake);
     }

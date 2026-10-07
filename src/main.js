@@ -6,15 +6,25 @@ import { createFx } from './fx.js';
 import { createGame } from './game.js';
 import { createRecorder } from './recorder.js';
 import { createAudio } from './audio.js';
-import { initI18n, setLang, getLang, onLangChange, savedLang, t, LANGS } from './i18n.js';
+import { initI18n, setLang, getLang, onLangChange, savedLang, t, tName, LANGS } from './i18n.js';
+import { WORLDS, world, useWorld } from './worlds.js';
+import { saveKeyFor, readProgress, writeProgress, worldWon } from './save.js';
+import { applyWorldLook } from './models.js';
+import { REWARDS, BOSSES } from './config.js';
 
 const params = new URLSearchParams(location.search);
 // texts first (English on first launch). Autopilot footage is always in English and never saves a choice.
 await initI18n(params.has('auto') ? 'en' : null);
 if (params.has('shorts')) document.body.classList.add('shorts');
-// ?reset=1 starts a fresh game (wipes the local save)
-// ?slot=test uses a separate save (for testing without touching the real one)
-const SAVE_KEY = 'polarcamp-save-v1' + (params.get('slot') ? '-' + params.get('slot') : '');
+// ?slot=test uses a separate set of saves (for testing without touching the real ones)
+const SLOT = params.get('slot') || '';
+// The world being played (each world keeps its own camp). ?world=island previews another world
+// (tests only, nothing is remembered); the autopilot plays the polar map unless told otherwise.
+useWorld(params.get('world') || (params.has('auto') ? 'polar' : readProgress(SLOT).world));
+if (!world().ready && !params.has('world')) useWorld('polar');
+applyWorldLook(); // camp materials (wood or bamboo) before any model is built
+// ?reset=1 starts this world over (wipes its save)
+const SAVE_KEY = saveKeyFor(world().id, SLOT);
 if (params.has('reset')) { try { localStorage.removeItem(SAVE_KEY); } catch { /* ignore */ } }
 
 const stage = document.getElementById('stage');
@@ -31,15 +41,16 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0xcfe3f2);
-scene.fog = new THREE.Fog(0xcfe3f2, 26, 55);
+const PAL = world().palette;
+scene.background = new THREE.Color(PAL.sky);
+scene.fog = new THREE.Fog(PAL.sky, 26, 55);
 
 const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 120);
 const CAM_OFFSET = new THREE.Vector3(0, 15, 10.5);
 let camDist = 1;
 
-scene.add(new THREE.HemisphereLight(0xeaf4ff, 0x9fb2c4, 1.9));
-const sun = new THREE.DirectionalLight(0xfff4e0, 1.6);
+scene.add(new THREE.HemisphereLight(PAL.hemiSky, PAL.hemiGround, 1.9));
+const sun = new THREE.DirectionalLight(PAL.sun, 1.6);
 sun.castShadow = true;
 sun.shadow.mapSize.setScalar(MOBILE ? 1024 : 2048);
 Object.assign(sun.shadow.camera, { left: -20, right: 20, top: 20, bottom: -20, near: 1, far: 60 });
@@ -51,6 +62,12 @@ const $ = (id) => document.getElementById(id);
 const hud = {
   setCash(v) { $('cash').textContent = v.toLocaleString('en-US'); },
   bumpCash() { const p = $('cash-pill'); p.classList.remove('bump'); void p.offsetWidth; p.classList.add('bump'); },
+  // island tide gauge: f = 0 low tide … 1 high tide; ▲ while the sea rises, ▼ while it goes out
+  setTide(f, rising) {
+    $('tide-pill').classList.remove('hidden');
+    $('tide-fill').style.width = `${Math.round(f * 100)}%`;
+    $('tide-arrow').textContent = rising ? '▲' : '▼';
+  },
   setBag(n, cap) { $('bag').textContent = `${n}/${cap}`; $('bag-pill').style.color = n >= cap ? '#ffd34d' : '#fff'; },
   setWave(title, frac) { $('wave-title').textContent = title; $('wave-fill').style.width = `${Math.max(0, Math.min(1, frac)) * 100}%`; },
   setHp(f) { $('hp-fill').style.width = `${f * 100}%`; },
@@ -58,6 +75,8 @@ const hud = {
   defeat(show) { $('defeat').classList.toggle('hidden', !show); input.setEnabled(!show); },
   // the map is won: victory screen → world map → keep playing (endless)
   victory({ waves }) {
+    // the world's own final boss (the Bear King, the shell bear…)
+    $('victory-sub').textContent = t('victory.sub', { name: tName(BOSSES[world().finalBoss]?.name || '') });
     $('victory-stats').textContent = t('victory.stats', { n: waves });
     $('victory').classList.remove('hidden');
     sfx.play('victory');
@@ -102,16 +121,71 @@ const showSound = () => {
 };
 showSound();
 const setMuted = (m) => { sfx.setMuted(m); showSound(); sfx.play('click'); };
+// music: the world's loop, with its own switch in the Options (autopilot footage stays silent: music is added in the edit)
+const showMusic = () => document.querySelectorAll('#opt-music button').forEach((b) => b.classList.toggle('on', (b.dataset.music === 'on') === sfx.musicOn));
+showMusic();
+if (!params.has('auto')) sfx.setMusic(world().music);
 soundBtn.addEventListener('click', () => setMuted(!sfx.muted));
 
 // Autopilot sessions (footage/tests) never read or write the player's save.
-const game = createGame({ scene, camera, fx, input, hud, labelsEl, useSave: !params.has('auto'), sfx, saveKey: SAVE_KEY });
+// free bag levels: REWARDS.freeBagLevels for each world beaten before this one
+const bagBonus = REWARDS.freeBagLevels * WORLDS.slice(0, world().n - 1).filter((w) => worldWon(w.id, SLOT)).length;
+const game = createGame({ scene, camera, fx, input, hud, labelsEl, useSave: !params.has('auto'), sfx, saveKey: SAVE_KEY, bagBonus });
 const recorder = createRecorder(stage, canvas, () => renderer.render(scene, camera));
 
 $('retry').addEventListener('click', () => game.retry());
 
-// ---------- World map (opens after the victory, then from the 🗺️ button) ----------
+// ---------- World map, Mario style (opens after a victory, then from the 🗺️ button) ----------
+// Every world sits on one path. Beaten = 👑, unlocked = in color (tap to travel there),
+// unlocked but not built yet = "coming soon", locked = a dark silhouette.
+const MAP_POS = [[16, 80], [42, 85], [68, 79], [81, 61], [56, 52], [30, 57], [14, 39], [34, 22], [60, 28], [81, 11]];
+const hex = (c) => '#' + c.toString(16).padStart(6, '0');
+const anyWon = () => WORLDS.some((w) => worldWon(w.id, SLOT)) || game.won;
+
+function drawMap() {
+  const won = WORLDS.map((w) => (w.id === world().id ? game.won : worldWon(w.id, SLOT)));
+  const state = WORLDS.map((w, i) => {
+    // unlocked: the first world, the one after a beaten world, a beaten world, and the one you're playing
+    const open = i === 0 || won[i - 1] || won[i] || w.id === world().id;
+    return !open ? 'locked' : won[i] ? 'beaten' : w.ready ? 'open' : 'soon';
+  });
+  const board = $('map-board');
+  board.style.backgroundImage = WORLDS.map((w, i) => {
+    const [x, y] = MAP_POS[i];
+    return `radial-gradient(circle at ${x}% ${y}%, ${state[i] === 'locked' ? '#3a4654' : hex(w.palette.ground)} 0 10%, transparent 10.5%)`;
+  }).join(', ');
+  const lines = MAP_POS.slice(1).map(([x, y], i) => {
+    const [px, py] = MAP_POS[i];
+    return `<line class="${state[i + 1] === 'locked' ? 'dark' : 'open'}" x1="${px}" y1="${py}" x2="${x}" y2="${y}" />`;
+  }).join('');
+  board.innerHTML = `<svg class="map-path" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">${lines}</svg>`
+    + WORLDS.map((w, i) => {
+      const [x, y] = MAP_POS[i], st = state[i], here = w.id === world().id;
+      const badge = st === 'beaten' ? '👑' : st === 'locked' ? '🔒' : '';
+      const label = st === 'locked' ? t('map.world', { n: w.n }) : tName(w.name);
+      const tag = st === 'beaten' ? t('map.beaten') : st === 'soon' ? t('map.soon') : here ? t('map.here') : '';
+      return `<button class="map-node ${st}${here ? ' here' : ''}" data-world="${w.id}" style="left:${x}%;top:${y}%" ${st === 'locked' || st === 'soon' ? 'disabled' : ''}>
+        <div class="map-pin"><span>${w.icon}</span>${badge ? `<span class="map-badge">${badge}</span>` : ''}</div>
+        <b>${label}</b>${tag ? `<small>${tag}</small>` : ''}</button>`;
+    }).join('');
+  board.querySelectorAll('.map-node:not([disabled])').forEach((b) => b.addEventListener('click', () => travel(b.dataset.world)));
+  // the line under the map: what's next
+  const next = WORLDS[WORLDS.findIndex((w) => w.id === world().id) + 1];
+  $('map-text').textContent = game.won && next && !next.ready ? t('map.endless', { name: tName(next.name) }) : t('map.pick');
+}
+
+// Travel to another world: save this camp, remember the choice, and load that world's camp.
+function travel(id) {
+  sfx.play('click');
+  if (id === world().id) { closeMap(); return; }
+  if (params.has('auto') || params.has('world')) return; // previews and footage never switch saves
+  game.save();
+  writeProgress({ world: id }, SLOT);
+  location.replace(location.pathname + (SLOT ? `?slot=${encodeURIComponent(SLOT)}` : ''));
+}
+
 function openMap() {
+  drawMap();
   $('victory').classList.add('hidden');
   $('worldmap').classList.remove('hidden');
   if (game.auto.on) { setTimeout(closeMap, 3000); return; }
@@ -119,7 +193,7 @@ function openMap() {
 }
 function closeMap() {
   $('worldmap').classList.add('hidden');
-  if (!params.has('auto')) $('map-btn').classList.toggle('hidden', !game.won);
+  if (!params.has('auto')) $('map-btn').classList.toggle('hidden', !anyWon());
   pause(false);
 }
 $('victory-map').addEventListener('click', () => { sfx.play('click'); openMap(); });
@@ -196,6 +270,7 @@ $('lang-link').addEventListener('click', openOptions);
 $('options-close').addEventListener('click', closeOptions);
 document.querySelectorAll('#opt-lang button').forEach((b) => b.addEventListener('click', () => { sfx.play('click'); setLang(b.dataset.lang); }));
 document.querySelectorAll('#opt-sound button').forEach((b) => b.addEventListener('click', () => setMuted(b.dataset.sound === 'off')));
+document.querySelectorAll('#opt-music button').forEach((b) => b.addEventListener('click', () => { sfx.play('click'); sfx.setMusicOn(b.dataset.music === 'on'); showMusic(); }));
 
 // First launch: the signpost language picker, before the title screen. English is preselected;
 // tapping a plank previews the whole screen in that language, CONTINUE saves the choice.
@@ -218,7 +293,7 @@ function startGame() {
   document.body.classList.add('playing');
   started = true;
   input.setEnabled(true);
-  $('map-btn').classList.toggle('hidden', !game.won);
+  $('map-btn').classList.toggle('hidden', !anyWon());
   // first time ever: show the rules once before the first wave
   if (!store.get('polarcamp-seen-help')) openHelp();
 }

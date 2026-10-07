@@ -3,18 +3,23 @@
 // (ground slam, phase 2: summons + ice blocks; his death wins the map through `victory`).
 // Everything else in the game reaches bears through what createBears returns.
 import * as THREE from 'three';
-import { PLAYER, BEAR, BOSSES, POISON, WAVES, BALLISTA } from './config.js';
+import { PLAYER, BEAR, BOSSES, POISON, WAVES, BALLISTA, MONKEYS } from './config.js';
 import * as Models from './models.js';
 import { t as tr, tName } from './i18n.js';
 import { lerpAngle, dist2d } from './util.js';
 
 const V = () => new THREE.Vector3();
+// the shell bear's spin: a thin strip on the ground per shell (scaled to the range), and the shells' speed
+const SPIN_LINE_GEO = new THREE.PlaneGeometry(0.12, 1);
+const SHELL_SPEED = 11;
 const tmpA = V();
 
 // now() = game clock, wave() = current wave number; the rest are the game's own objects and actions.
 export function createBears({
   scene, camera, fx, sfx, player, walls, towers, wallColliders, events, stats, now, wave,
   towerMult, learn, dropItem, resolve, damageWall, damageTower, hurtPlayer, poisonPlayer, victory,
+  slowAt = () => 1, // speed factor where a bear walks (wading in the island's high tide)
+  helpers = [],     // hired workers (the monkey chief's monkeys jump on them too)
 }) {
   const bears = [];
 
@@ -54,6 +59,13 @@ export function createBears({
   function hurtBear(b, dmg, from, pierce = false) {
     if (b.dying) return;
     const at = b.pos.clone().setY(1 * b.def.scale);
+    if (b.curled) {
+      // the shell bear inside its shell: nothing gets through
+      fx.burst(at.clone().setY(1.2 * b.def.scale), 0xfff3a0, 4, { speed: 3, up: 2, size: 0.06 });
+      if (Math.random() < 0.35) fx.text(at.clone().setY(2 * b.def.scale), tr('fx.tink'), 'warn', { life: 0.5, rise: 30 });
+      sfx.play('tink', { at: b.pos });
+      return;
+    }
     b.bar.visible = true;
     if (b.armor > 0) {
       if (!from && !pierce) {
@@ -101,11 +113,13 @@ export function createBears({
 
   function killBear(b) {
     b.dying = 0.001;
+    if (b.kind === 'shell') clearSpinLines();
     if (b.slamRing) { scene.remove(b.slamRing); b.slamRing = null; }
     b.bar.visible = false;
     if (b.armorBar) b.armorBar.visible = false;
     fx.burst(b.pos.clone().setY(0.8), 0xffffff, b.boss ? 30 : 14, { speed: 5, up: 5, size: 0.2 });
     fx.addShake(b.boss ? 0.5 : 0.12);
+    if (b.kind === 'monkey') releaseMonkeys(); // its monkeys run away
     if (b.boss) {
       fx.text(b.pos.clone().setY(3), tr('fx.bossDown', { name: tName(b.def.name) }), 'warn', { life: 1.5, rise: 90 });
       // shockwave: every bear on the map is stunned for a few seconds (time to heal and clean up)
@@ -168,8 +182,11 @@ export function createBears({
       // Log thrower: lobs logs from range at the closest target (a standing wall or you);
       // it only comes to bite when you're right next to it.
       // Bear King: slams the ground (stands still while the red ring fills), then phase 2
-      const busy = b.kind === 'king' && !stunned && updateKing(b, dt, dist);
-      const aim = b.kind === 'thrower' && !stunned && !P.dead && dist > reach + 0.3 ? throwerAim(b) : null;
+      // Shell bear: curls up and rolls into the walls, then sits dizzy
+      const busy = !stunned && ((b.kind === 'king' && updateKing(b, dt, dist)) || (b.kind === 'shell' && updateShell(b, dt, dist)));
+      if (b.faceAt) { faceX = b.faceAt.x; faceZ = b.faceAt.z; }
+      // ranged bosses (log / coconut thrower, monkey chief) keep their distance and throw
+      const aim = b.def.range && !stunned && !P.dead && dist > reach + 0.3 ? (b.def.throws === 'monkey' ? monkeyAim(b) : throwerAim(b)) : null;
       if (aim) {
         const dA = dist2d(b.pos, aim.point);
         faceX = aim.point.x; faceZ = aim.point.z;
@@ -179,7 +196,7 @@ export function createBears({
         } else {
           b.vel.set(0, 0, 0);
           b.throwT -= dt;
-          if (b.throwT <= 0) { b.throwT = b.def.throwEvery; b.lunge = 1; throwLog(b, aim); }
+          if (b.throwT <= 0) { b.throwT = b.def.throwEvery; b.lunge = 1; (b.def.throws === 'monkey' ? throwMonkey : throwLog)(b, aim); }
         }
       } else if (!stunned && !busy && !P.dead && dist > reach) {
         toP.normalize();
@@ -216,8 +233,8 @@ export function createBears({
           b.pos.x += (dx / d) * push; b.pos.z += (dz / d) * push;
         }
       }
-      b.pos.addScaledVector(b.vel, dt);
-      resolve(b.pos, b.def.radius, false);
+      b.pos.addScaledVector(b.vel, dt * slowAt(b.pos));
+      resolve(b.pos, b.def.radius, false, !!b.curled); // curled up, the shell bear rolls over small buildings
       if (Math.hypot(faceX - b.pos.x, faceZ - b.pos.z) > 0.01) b.obj.rotation.y = lerpAngle(b.obj.rotation.y, Math.atan2(faceX - b.pos.x, faceZ - b.pos.z), Math.min(1, dt * 8));
 
       // Blocked by a wall on the way to you? It chews on it (small damage, bosses hit harder):
@@ -245,7 +262,7 @@ export function createBears({
       if (!stunned && !busy && !P.dead && dist <= reach + 0.1) {
         b.attackT -= dt;
         if (b.attackT <= 0) {
-          b.attackT = b.def.attackRate;
+          b.attackT = b.def.attackRate * (b.rage && b.def.rageAttack ? b.def.rageAttack : 1);
           b.lunge = 1;
           hurtPlayer(b.bite);
           if (b.kind === 'poison') poisonPlayer(POISON.bite);
@@ -257,7 +274,8 @@ export function createBears({
       ud.body.position.y = moving ? Math.abs(Math.sin(b.walkT)) * 0.06 : 0;
       if (ud.cape) ud.cape.rotation.z = moving ? Math.sin(b.walkT) * 0.04 : 0;
       b.lunge = Math.max(0, b.lunge - dt * 4);
-      ud.head.position.z = 0.75 + Math.sin(b.lunge * Math.PI) * 0.35;
+      ud.headZ ??= ud.head.position.z;
+      ud.head.position.z = ud.headZ + Math.sin(b.lunge * Math.PI) * 0.35;
       b.flash = Math.max(0, b.flash - dt);
       b.obj.scale.setScalar(b.def.scale * (1 + b.flash * 1.2));
       b.obj.position.copy(b.pos);
@@ -273,15 +291,327 @@ export function createBears({
         // the log leaves its paws when thrown, comes back, and is raised overhead right before the next throw
         held.visible = b.throwT < b.def.throwEvery - 0.5;
         const windup = Math.max(0, 1 - b.throwT / 0.7);
-        held.position.y = 1.15 + windup * 0.9;
-        held.position.z = 0.65 - windup * 0.5;
+        const base = held.userData.base ??= held.position.clone();
+        held.position.y = base.y + windup * 0.9;
+        held.position.z = base.z - windup * 0.5;
       }
     }
     updateThrown(dt);
+    updateMonkeys(dt);
+    updateShells(dt);
     updateClouds(dt);
   }
 
-  // ---------- Bear King ----------
+  // ---------- Shell bear (island final boss) ----------
+  // Each move: a pinball run (3 rolls bouncing off the walls, the last one aimed at you), then a
+  // shell spin if you're in range (sharp shells fired all around in a ring, shown 1 s before). All of it
+  // curled up (invulnerable), then it's dizzy: the moment to hit it. Phase 2 below 50%: the shell
+  // breaks for good, it gets faster and angrier, no more moves.
+  // Returns true while it's busy with all that (it doesn't walk or bite on its own).
+  function updateShell(b, dt, dist) {
+    const d = b.def;
+    b.state ??= 'walk';
+    b.rollT ??= d.rollEvery;
+    if (!b.rage && !b.curled && b.hp <= b.maxHp * d.phase2) breakShell(b);
+    if (b.state === 'walk') {
+      b.faceAt = null;
+      if (b.rage || player.dead) return false;
+      b.rollT -= dt;
+      // blocked by the camp's buildings on its way to you (not 0.5 m closer in `stuckRoll` s while still
+      // out of reach): it doesn't wait, it rolls straight at you
+      b.chaseT = (b.chaseT || 0) + dt;
+      if (b.chaseT >= d.stuckRoll) {
+        b.stuck = dist > d.radius + 2 && dist > (b.lastDist ?? Infinity) - 0.5;
+        b.lastDist = dist; b.chaseT = 0;
+      }
+      const stuck = b.stuck;
+      if (b.rollT > 0 && !stuck) return false;
+      // every move: a pinball run, then a shell spin (owner, 2026-10-07)
+      b.move = 'roll';
+      b.state = 'curl'; b.stateT = d.curlTime; b.curled = true;
+      if (b.move === 'roll') { b.rollsLeft = d.rollChain; aimRoll(b, stuck ? player.pos : throwerAim(b).point); }
+      b.stuck = false; b.lastDist = undefined; b.chaseT = 0;
+      sfx.play('slamWarn', { at: b.pos });
+      return true;
+    }
+    if (b.state === 'curl') {
+      b.stateT -= dt;
+      curlLook(b, 1 - b.stateT / d.curlTime);
+      if (b.stateT > 0) return true;
+      if (b.move === 'roll') { b.state = 'roll'; b.stateT = d.rollMax; sfx.play('whoosh', { at: b.pos }); }
+      else { b.state = 'spin'; b.stateT = d.spinWarn; b.volleys = 0; showSpinLines(b); }
+      return true;
+    }
+    if (b.state === 'roll') return roll(b, dt);
+    if (b.state === 'spin') return spin(b, dt);
+    // dizzy: stars, no bite, the moment to hit it
+    b.stateT -= dt;
+    b.starT = (b.starT || 0) - dt;
+    if (b.starT <= 0) { b.starT = 0.3; fx.burst(b.pos.clone().setY(2 * d.scale), 0xfff3a0, 2, { speed: 1.2, up: 1, size: 0.12, life: 0.5 }); }
+    if (b.stateT <= 0) { b.state = 'walk'; b.rollT = d.rollEvery; }
+    return true;
+  }
+
+  function aimRoll(b, point) {
+    b.rollDir = new THREE.Vector3(point.x - b.pos.x, 0, point.z - b.pos.z);
+    if (b.rollDir.lengthSq() < 1e-4) b.rollDir.set(0, 0, 1);
+    b.rollDir.normalize();
+    b.faceAt = b.pos.clone().addScaledVector(b.rollDir, 5);
+    b.ranOver = false;
+  }
+
+  function dizzy(b) {
+    curlLook(b, 0);
+    b.curled = false;
+    b.state = 'dizzy'; b.stateT = b.def.dizzy; b.faceAt = null;
+  }
+
+  // one roll of the pinball run; it bounces off what it hits until the chain is used up
+  function roll(b, dt) {
+    const d = b.def, ud = b.obj.userData;
+    const step = d.rollSpeed * slowAt(b.pos) * dt;
+    const bx = b.pos.x, bz = b.pos.z;
+    b.pos.addScaledVector(b.rollDir, step);
+    resolve(b.pos, d.radius, false, true); // rolls over the camp's small buildings, walls and towers stop it
+    const moved = Math.hypot(b.pos.x - bx, b.pos.z - bz);
+    ud.shell.rotation.x += moved / 0.8;
+    b.faceAt = b.pos.clone().addScaledVector(b.rollDir, 5);
+    if (!b.ranOver && !player.dead && dist2d(b.pos, player.pos) < d.radius * d.scale * 0.6 + PLAYER.radius) {
+      // ran over: knocked aside
+      b.ranOver = true;
+      player.pos.addScaledVector(b.rollDir, d.rollPush);
+      resolve(player.pos, PLAYER.radius, true);
+      hurtPlayer(d.rollHit);
+    }
+    const touching = (c) => {
+      const x = THREE.MathUtils.clamp(b.pos.x, c.minX, c.maxX), z = THREE.MathUtils.clamp(b.pos.z, c.minZ, c.maxZ);
+      return Math.hypot(b.pos.x - x, b.pos.z - z) < d.radius + 0.15;
+    };
+    // right after a bounce it's still against the wall: give it a moment to roll away
+    b.bounceT = Math.max(0, (b.bounceT || 0) - dt);
+    const hit = b.bounceT > 0 ? null : wallColliders.find(touching) || towers.find((t) => t.ballista && touching(t.box))?.box;
+    b.stateT -= dt;
+    const blocked = b.bounceT <= 0 && moved < step * 0.3;
+    if (!hit && !blocked && b.stateT > 0) return true;
+    if (hit) {
+      const dmg = Math.round(d.rollDamage * b.hpMult);
+      if (hit.wall) damageWall(hit.wall, dmg); else if (hit.tower) damageTower(hit.tower, dmg);
+    }
+    if (hit || blocked) {
+      fx.addShake(0.45);
+      fx.burst(b.pos.clone().setY(0.8), 0xf6dcc0, 16, { speed: 7, up: 3, size: 0.16 });
+      fx.text(b.pos.clone().setY(3.5), tr('fx.bonk'), 'warn', { life: 0.8, rise: 50 });
+      sfx.play('slam', { at: b.pos });
+    }
+    b.rollsLeft--;
+    if (b.rollsLeft <= 0 || player.dead) {
+      // end of the run: still curled up, it spins if you're in range of the shells, else it's dizzy
+      if (!player.dead && dist2d(b.pos, player.pos) < d.spinRange - 1) { b.move = 'spin'; b.state = 'spin'; b.stateT = d.spinWarn; b.volleys = 0; b.faceAt = null; showSpinLines(b); }
+      else dizzy(b);
+      return true;
+    }
+    // bounce: the last roll goes for you, the others ricochet off what they hit
+    if (b.rollsLeft === 1) aimRoll(b, player.pos);
+    else {
+      let n;
+      if (hit) {
+        const x = THREE.MathUtils.clamp(b.pos.x, hit.minX, hit.maxX), z = THREE.MathUtils.clamp(b.pos.z, hit.minZ, hit.maxZ);
+        n = new THREE.Vector3(b.pos.x - x, 0, b.pos.z - z);
+      }
+      if (!n || n.lengthSq() < 1e-4) n = b.rollDir.clone().negate();
+      n.normalize();
+      const dir = b.rollDir.clone().addScaledVector(n, -2 * b.rollDir.dot(n));
+      dir.applyAxisAngle(new THREE.Vector3(0, 1, 0), (Math.random() - 0.5) * 0.5);
+      aimRoll(b, b.pos.clone().add(dir));
+    }
+    b.stateT = d.rollMax;
+    b.bounceT = 0.3;
+    return true;
+  }
+
+  // shell spin: lines on the ground show where the shells will fly, then two volleys (the second
+  // one fills the gaps of the first)
+  const spinLines = [];
+  function showSpinLines(b) {
+    const d = b.def;
+    for (let v = 0; v < d.spinVolleys; v++) {
+      for (let i = 0; i < d.spinShells; i++) {
+        const a = ((i + v * 0.5) / d.spinShells) * Math.PI * 2;
+        const line = new THREE.Mesh(SPIN_LINE_GEO, new THREE.MeshBasicMaterial({ color: v ? 0xffa64d : 0xff3b30, transparent: true, opacity: 0.6, depthWrite: false }));
+        line.rotation.set(-Math.PI / 2, 0, a); // lies flat, along the shell's path (centered at mid-range)
+        line.position.set(b.pos.x + Math.sin(a) * d.spinRange / 2, 0.05 + v * 0.01, b.pos.z + Math.cos(a) * d.spinRange / 2);
+        line.scale.set(1, d.spinRange, 1);
+        scene.add(line);
+        spinLines.push(line);
+      }
+    }
+  }
+  function clearSpinLines(volley) {
+    for (let i = spinLines.length - 1; i >= 0; i--) {
+      if (volley !== undefined && spinLines[i].position.y > 0.055 !== (volley === 1)) continue;
+      scene.remove(spinLines[i]);
+      spinLines.splice(i, 1);
+    }
+  }
+  function spin(b, dt) {
+    const d = b.def, ud = b.obj.userData;
+    ud.shell.rotation.y += dt * 14;
+    for (const l of spinLines) l.material.opacity = 0.35 + Math.abs(Math.sin(now() * 10)) * 0.4;
+    b.stateT -= dt;
+    if (b.stateT > 0) return true;
+    // fire a volley
+    const v = b.volleys++;
+    for (let i = 0; i < d.spinShells; i++) {
+      const a = ((i + v * 0.5) / d.spinShells) * Math.PI * 2;
+      const mesh = Models.makeSharpShell();
+      mesh.position.set(b.pos.x, 0.8, b.pos.z);
+      mesh.rotation.y = a;
+      scene.add(mesh);
+      shells.push({ mesh, dir: new THREE.Vector3(Math.sin(a), 0, Math.cos(a)), left: d.spinRange, hit: d.spinHit, dmg: Math.round(d.spinWallDamage * b.hpMult) });
+    }
+    clearSpinLines(v);
+    sfx.play('whoosh', { at: b.pos });
+    fx.addShake(0.25);
+    if (b.volleys < d.spinVolleys) { b.stateT = d.spinGap; return true; }
+    ud.shell.rotation.y = 0;
+    dizzy(b);
+    return true;
+  }
+
+  const shells = []; // sharp shells in flight
+  function updateShells(dt) {
+    for (let i = shells.length - 1; i >= 0; i--) {
+      const s = shells[i];
+      const step = SHELL_SPEED * dt;
+      s.mesh.position.addScaledVector(s.dir, step);
+      s.mesh.rotation.x += dt * 12;
+      s.left -= step;
+      const p = s.mesh.position;
+      let done = s.left <= 0;
+      if (!done && !player.dead && dist2d(p, player.pos) < PLAYER.radius + 0.35) { hurtPlayer(s.hit); done = true; }
+      if (!done) {
+        const inside = (c) => p.x > c.minX - 0.1 && p.x < c.maxX + 0.1 && p.z > c.minZ - 0.1 && p.z < c.maxZ + 0.1;
+        const c = wallColliders.find(inside) || towers.find((t) => t.ballista && inside(t.box))?.box;
+        // walls stop the shells (and take the hit): inside the camp you're safe (owner)
+        if (c) { if (c.wall) damageWall(c.wall, s.dmg); else if (c.tower) damageTower(c.tower, s.dmg); done = true; }
+      }
+      if (done) {
+        fx.burst(p.clone(), 0xf6dcc0, 5, { speed: 3, up: 2, size: 0.08 });
+        scene.remove(s.mesh);
+        shells.splice(i, 1);
+      }
+    }
+  }
+
+  // k = 0 (walking) … 1 (curled up: only the shell shows, lowered to roll on the ground)
+  function curlLook(b, k) {
+    const ud = b.obj.userData, shell = ud.shell;
+    ud.shellBase ??= shell.position.clone();
+    ud.curlHide ??= ud.body.children.filter((c) => c !== shell);
+    for (const c of ud.curlHide) c.visible = k < 0.5;
+    shell.position.set(ud.shellBase.x, ud.shellBase.y + (0.78 - ud.shellBase.y) * k, ud.shellBase.z * (1 - k));
+    if (k === 0) shell.rotation.x = 0;
+  }
+
+  // Phase 2: the shell cracks open for good; faster and angrier, no more rolling.
+  function breakShell(b) {
+    b.rage = true;
+    const at = b.pos.clone().setY(1.4 * b.def.scale);
+    b.obj.userData.shell.visible = false;
+    fx.burst(at, 0xf6dcc0, 30, { speed: 9, up: 5, size: 0.22, life: 0.9 });
+    fx.burst(at, 0xd9825a, 16, { speed: 7, up: 4, size: 0.18, life: 0.9 });
+    fx.text(b.pos.clone().setY(5), tr('fx.shellBroken'), 'warn', { life: 1.6, rise: 80 });
+    fx.addShake(0.6);
+    sfx.play('crash', { at: b.pos });
+    sfx.play('kingRoar', { at: b.pos });
+    events.push({ type: 'finalPhase2', t: now() });
+  }
+
+  // ---------- Monkey chief's monkeys ----------
+  const monkeys = []; // { mesh, state: 'fly' | 'loose' | 'cling', host, ... }
+  const clingOn = (host) => monkeys.filter((m) => m.state === 'cling' && m.host === host);
+  // speed factor for the player or a worker carrying monkeys
+  const clingSlow = (host) => 1 - Math.min(MONKEYS.slowCap, MONKEYS.slowEach * clingOn(host).length);
+
+  // the closest of you and the workers (it never throws at walls)
+  function monkeyAim(b) {
+    let best = player.dead ? null : player, bestD = best ? dist2d(b.pos, player.pos) : Infinity;
+    for (const h of helpers) { const d = dist2d(b.pos, h.pos); if (d < bestD) { bestD = d; best = h; } }
+    return best ? { point: best.pos.clone(), host: best } : null;
+  }
+
+  function throwMonkey(b, aim) {
+    const mesh = Models.makeSmallMonkey();
+    const from = b.pos.clone().setY(1.8 * b.def.scale);
+    mesh.position.copy(from);
+    scene.add(mesh);
+    monkeys.push({ mesh, state: 'fly', from, to: aim.point.clone().setY(0), t: 0, dur: 0.9 });
+    sfx.play('whoosh', { at: b.pos });
+  }
+
+  function cling(m, host) {
+    m.state = 'cling'; m.host = host; m.biteT = MONKEYS.biteEvery;
+    m.slot = clingOn(host).length - 1;
+  }
+
+  function dropMonkey(i, splash) {
+    const m = monkeys[i];
+    fx.burst(m.mesh.position.clone(), splash ? 0xffffff : 0x7a4a2a, splash ? 10 : 6, { speed: 3, up: 3, size: 0.1 });
+    scene.remove(m.mesh);
+    monkeys.splice(i, 1);
+  }
+
+  function releaseMonkeys() { for (let i = monkeys.length - 1; i >= 0; i--) dropMonkey(i, false); }
+
+  function updateMonkeys(dt) {
+    const hosts = [player, ...helpers];
+    let shook = false;
+    for (let i = monkeys.length - 1; i >= 0; i--) {
+      const m = monkeys[i];
+      if (m.state === 'fly') {
+        m.t += dt / m.dur;
+        const k = Math.min(1, m.t);
+        m.mesh.position.lerpVectors(m.from, m.to, k);
+        m.mesh.position.y += Math.sin(k * Math.PI) * 3;
+        m.mesh.rotation.x += dt * 8;
+        if (k < 1) continue;
+        m.mesh.rotation.x = 0;
+        // lands on whoever is there, else runs after you
+        const host = hosts.find((h) => !(h === player && player.dead) && dist2d(h.pos, m.to) < 1.6 && clingOn(h).length < MONKEYS.perHost);
+        if (host) cling(m, host); else { m.state = 'loose'; m.life = MONKEYS.life; m.mesh.position.copy(m.to); }
+        continue;
+      }
+      if (m.state === 'loose') {
+        m.life -= dt;
+        const p = m.mesh.position;
+        if (m.life <= 0 || player.dead || slowAt(p) < 1) { dropMonkey(i, slowAt(p) < 1); continue; }
+        const dx = player.pos.x - p.x, dz = player.pos.z - p.z, l = Math.hypot(dx, dz);
+        if (l < 0.9 && clingOn(player).length < MONKEYS.perHost) { cling(m, player); continue; }
+        p.x += (dx / l) * MONKEYS.run * dt; p.z += (dz / l) * MONKEYS.run * dt;
+        m.mesh.rotation.y = Math.atan2(dx, dz);
+        m.mesh.position.y = Math.abs(Math.sin(now() * 14)) * 0.12;
+        continue;
+      }
+      // clinging: rides on the host's back and shoulders
+      const h = m.host;
+      if ((h === player && player.dead) || slowAt(h.pos) < 1) {
+        // into the water: everybody off!
+        if (h === player && !shook) { shook = true; fx.text(player.pos.clone().setY(2.6), tr('fx.monkeysOff'), 'cash', { life: 1, rise: 40 }); }
+        dropMonkey(i, true);
+        continue;
+      }
+      // a worker's monkeys jump onto you when you walk up to it
+      if (h !== player && !player.dead && dist2d(h.pos, player.pos) < 1.6 && clingOn(player).length < MONKEYS.perHost) { cling(m, player); continue; }
+      const a = m.slot * 2.1 + 0.6;
+      m.mesh.position.set(h.pos.x + Math.sin(a) * 0.38, 0.75 + (m.slot % 2) * 0.35 + Math.sin(now() * 9 + m.slot) * 0.04, h.pos.z + Math.cos(a) * 0.38);
+      m.mesh.rotation.y = a + Math.PI;
+      if (h === player) {
+        m.biteT -= dt;
+        if (m.biteT <= 0) { m.biteT = MONKEYS.biteEvery; hurtPlayer(Math.round(BEAR.damage(Math.max(1, wave())) * MONKEYS.biteShare * 10) / 10); }
+      }
+    }
+  }
+
   // Returns true while he is busy slamming (he stands still).
   function updateKing(b, dt, dist) {
     const d = b.def, ud = b.obj.userData;
@@ -393,14 +723,15 @@ export function createBears({
   }
 
   function throwLog(b, aim) {
-    const mesh = Models.makeLog();
-    mesh.scale.setScalar(1.3);
+    const coco = b.def.throws === 'coconut';
+    const mesh = coco ? Models.makeCoconut() : Models.makeLog();
+    mesh.scale.setScalar(coco ? 1.6 : 1.3);
     const from = b.pos.clone().setY(1.6 * b.def.scale);
     // aim at where the player is now (they can dodge), or at the wall
     const to = aim.point.clone().setY(0.6);
     mesh.position.copy(from);
     scene.add(mesh);
-    thrown.push({ mesh, from, to, t: 0, dur: 1.1, wall: aim.wall, tower: aim.tower, dmg: Math.round(b.def.wallDamage * b.hpMult), hit: b.def.hitDamage });
+    thrown.push({ mesh, from, to, t: 0, dur: 1.1, coco, wall: aim.wall, tower: aim.tower, dmg: Math.round(b.def.wallDamage * b.hpMult), hit: b.def.hitDamage });
     sfx.play('whoosh', { at: b.pos });
   }
 
@@ -415,13 +746,14 @@ export function createBears({
       if (k < 1) continue;
       scene.remove(l.mesh);
       thrown.splice(i, 1);
-      fx.burst(l.to.clone(), l.ice ? 0xbfeaff : 0xb57a3f, l.ice ? 14 : 8, { speed: 4, up: 3, size: 0.12 });
+      fx.burst(l.to.clone(), l.ice ? 0xbfeaff : l.coco ? 0xf4ecd8 : 0xb57a3f, l.ice || l.coco ? 14 : 8, { speed: 4, up: 3, size: 0.12 });
+      if (l.coco) sfx.play('crack', { at: l.to });
       if (l.ice) sfx.play('iceShatter', { at: l.to });
       if (l.wall && !l.wall.broken) damageWall(l.wall, l.dmg);
       else if (l.tower && l.tower.ballista) damageTower(l.tower, l.dmg);
       else if (!player.dead && dist2d(player.pos, l.to) < 1.3) hurtPlayer(l.hit);
       // half the logs stay on the ground: free wood for repairs
-      if (!l.ice && Math.random() < 0.5) dropItem('log', l.to, 1.2);
+      if (!l.ice && !l.coco && Math.random() < 0.5) dropItem('log', l.to, 1.2);
     }
   }
 
@@ -449,5 +781,13 @@ export function createBears({
     }
   }
 
-  return { bears, clouds, thrown, spawnBear, hurtBear, updateBears };
+  // a defeat clears what's still flying (monkeys, sharp shells, spin warnings)
+  function clearExtras() {
+    releaseMonkeys();
+    clearSpinLines();
+    for (const s of shells) scene.remove(s.mesh);
+    shells.length = 0;
+  }
+
+  return { bears, clouds, thrown, spawnBear, hurtBear, updateBears, clingSlow, clingCount: (h) => clingOn(h).length, releaseMonkeys, clearExtras };
 }

@@ -1,5 +1,6 @@
 // "Juice": particles, flying items, floating text, screen shake, snowfall.
 import * as THREE from 'three';
+import { world } from './worlds.js';
 
 const tmp = new THREE.Vector3();
 
@@ -46,8 +47,10 @@ export function createFx(scene, camera, labelsEl, stageEl) {
 
   function addShake(amount) { shake = Math.min(0.6, shake + amount); }
 
-  // Snowfall around the camera target.
-  const SNOW = 700;
+  // Weather around the camera target, from the world's look: snowfall on the polar map,
+  // slow sea-breeze sparkles on the island (count, color, size, fall speed, sideways drift).
+  const W = world().look.weather;
+  const SNOW = W.count;
   const snowGeo = new THREE.BufferGeometry();
   const snowPos = new Float32Array(SNOW * 3);
   for (let i = 0; i < SNOW; i++) {
@@ -56,7 +59,7 @@ export function createFx(scene, camera, labelsEl, stageEl) {
     snowPos[i * 3 + 2] = (Math.random() - 0.5) * 40;
   }
   snowGeo.setAttribute('position', new THREE.BufferAttribute(snowPos, 3));
-  const snow = new THREE.Points(snowGeo, new THREE.PointsMaterial({ color: 0xffffff, size: 0.12, transparent: true, opacity: 0.9, depthWrite: false }));
+  const snow = new THREE.Points(snowGeo, new THREE.PointsMaterial({ color: W.color, size: W.size, transparent: true, opacity: W.opacity, depthWrite: false }));
   snow.frustumCulled = false;
   scene.add(snow);
 
@@ -108,8 +111,8 @@ export function createFx(scene, camera, labelsEl, stageEl) {
 
     const arr = snowGeo.attributes.position.array;
     for (let i = 0; i < SNOW; i++) {
-      arr[i * 3 + 1] -= dt * (1.2 + (i % 5) * 0.25);
-      arr[i * 3] += Math.sin((arr[i * 3 + 1] + i) * 0.5) * dt * 0.3;
+      arr[i * 3 + 1] -= dt * W.fall * (1 + (i % 5) * 0.2);
+      arr[i * 3] += Math.sin((arr[i * 3 + 1] + i) * 0.5) * dt * W.drift;
       if (arr[i * 3 + 1] < 0) arr[i * 3 + 1] += 18;
     }
     snowGeo.attributes.position.needsUpdate = true;
